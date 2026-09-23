@@ -214,5 +214,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Local source books used to test paragraph extraction
+app/logics/Химия 10 класс.pdf
+
 # Streamlit
 .streamlit/secrets.toml
