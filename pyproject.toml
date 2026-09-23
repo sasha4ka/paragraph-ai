@@ -10,17 +10,12 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.0",
     "maxapi>=1.2.2",
-    "pypdf>=6.9.2",
     "pydantic-settings>=2.15.0",
     "sqlalchemy>=2.0.54",
 ]
 
 [project.scripts]
 paragraph-ai = "paragraph_ai:main"
-
-[tool.uv]
-# The repository is an application with a top-level main.py, not a src package.
-package = false
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
