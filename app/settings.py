@@ -8,6 +8,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    api_token: str
-    openrouter_token: str
-    model: str
+    api_token: str | None = None
+    routerai_api_key: str | None = None
+    model: str = "openai/gpt-6-luna"
