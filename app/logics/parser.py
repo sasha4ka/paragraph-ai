@@ -1,13 +1,14 @@
 import datetime
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, model_validator
 from pypdf import PdfReader
 
-from app.models import BookChapter, BookMetadata, BookParagraph
+from app.models import BookMetadata, BookParagraph
 from app.openai import get_async_openai_client
 from app.settings import settings
 
@@ -19,7 +20,6 @@ class TableOfContentsEntry(BaseModel):
 
 class TableOfContents(BaseModel):
     paragraphs: dict[str, TableOfContentsEntry] = Field(default_factory=dict)
-    chapters: dict[str, TableOfContentsEntry] = Field(default_factory=dict)
 
     @staticmethod
     def _validate_unique_starts(
@@ -35,82 +35,40 @@ class TableOfContents(BaseModel):
     @model_validator(mode="after")
     def validate_unique_starts(self) -> "TableOfContents":
         self._validate_unique_starts(self.paragraphs, "paragraphs")
-        self._validate_unique_starts(self.chapters, "chapters")
-
-        paragraph_starts = {entry.book_page_start for entry in self.paragraphs.values()}
-        chapter_starts = {entry.book_page_start for entry in self.chapters.values()}
-        shared_starts = sorted(paragraph_starts & chapter_starts)
-        if shared_starts:
-            raise ValueError(
-                "Duplicate book_page_start values across paragraphs and chapters: "
-                f"{shared_starts}"
-            )
         return self
-
-
-def _looks_like_chapter_key(key: str) -> bool:
-    normalized = key.strip()
-    return bool(re.fullmatch(r"[IVXLCDM]+", normalized, flags=re.IGNORECASE)) or bool(
-        re.fullmatch(r"[A-ZА-ЯЁ]+", normalized)
-    )
 
 
 def _normalize_toc_payload(
     payload: dict[str, object],
 ) -> dict[str, dict[str, TableOfContentsEntry]]:
     paragraphs_raw = payload.get("paragraphs")
-    chapters_raw = payload.get("chapters")
 
-    if isinstance(paragraphs_raw, dict) or isinstance(chapters_raw, dict):
+    if isinstance(paragraphs_raw, dict):
         paragraphs = paragraphs_raw or {}
-        chapters = chapters_raw or {}
         return {
             "paragraphs": {
                 str(number): TableOfContentsEntry.model_validate(entry)
                 for number, entry in dict(paragraphs).items()
             },
-            "chapters": {
-                str(number): TableOfContentsEntry.model_validate(entry)
-                for number, entry in dict(chapters).items()
-            },
         }
 
-    if isinstance(paragraphs_raw, list) or isinstance(chapters_raw, list):
-        normalized = {"paragraphs": {}, "chapters": {}}
-        for category_name, entries in (
-            ("paragraphs", paragraphs_raw),
-            ("chapters", chapters_raw),
-        ):
-            if not isinstance(entries, list):
-                continue
-            for index, item in enumerate(entries):
-                if not isinstance(item, dict):
-                    continue
-                normalized[category_name][str(index)] = (
-                    TableOfContentsEntry.model_validate(item)
-                )
-        if normalized["paragraphs"] or normalized["chapters"]:
-            return normalized
+    if isinstance(paragraphs_raw, list):
+        return {
+            "paragraphs": {
+                str(index): TableOfContentsEntry.model_validate(item)
+                for index, item in enumerate(paragraphs_raw)
+                if isinstance(item, dict)
+            }
+        }
 
-    normalized = {"paragraphs": {}, "chapters": {}}
+    normalized = {"paragraphs": {}}
     for key, value in payload.items():
         if not isinstance(value, dict):
             continue
-        entry = TableOfContentsEntry.model_validate(value)
-        target = "chapters" if _looks_like_chapter_key(str(key)) else "paragraphs"
-        normalized[target][str(key)] = entry
+        normalized["paragraphs"][str(key)] = TableOfContentsEntry.model_validate(value)
 
-    if not normalized["paragraphs"] and not normalized["chapters"]:
+    if not normalized["paragraphs"]:
         raise ValueError("Table of contents payload does not contain valid entries")
-
-    if not normalized["chapters"] and set(payload) & {"I", "II", "III", "IV"}:
-        for key, value in payload.items():
-            if not isinstance(value, dict):
-                continue
-            if _looks_like_chapter_key(str(key)):
-                normalized["chapters"][str(key)] = TableOfContentsEntry.model_validate(
-                    value
-                )
 
     return normalized
 
@@ -166,6 +124,85 @@ def _find_title_page(reader: PdfReader, title: str) -> int:
     raise ValueError(f"Could not find paragraph title in PDF: {title}")
 
 
+def _find_title_pages(reader: PdfReader, title: str) -> list[int]:
+    page_count = len(reader.pages)
+    preferred_pages = list(range(10, max(10, page_count - 10)))
+    fallback_pages = list(range(page_count))
+    normalized_titles = [
+        _normalize_text(candidate) for candidate in _title_candidates(title)
+    ]
+
+    for page_numbers in (preferred_pages, fallback_pages):
+        page_texts = {
+            page_number: _normalize_text(reader.pages[page_number].extract_text() or "")
+            for page_number in page_numbers
+        }
+        for normalized_title in normalized_titles:
+            if not normalized_title:
+                continue
+            matches = [
+                page_number
+                for page_number, page_text in page_texts.items()
+                if normalized_title in page_text
+            ]
+            if matches:
+                return matches
+
+    return []
+
+
+def _find_page_offset(
+    reader: PdfReader,
+    entries: list[tuple[str, TableOfContentsEntry]],
+) -> int:
+    anchors = [
+        entry for entry in entries[:20] if len(_normalize_text(entry[1].title)) >= 20
+    ][:10]
+    if not anchors:
+        raise ValueError(
+            "Could not find sufficiently specific TOC entries for page offset"
+        )
+
+    matches_by_entry = [
+        (entry, _find_title_pages(reader, entry[1].title)) for entry in anchors
+    ]
+    matches_by_entry = [item for item in matches_by_entry if item[1]]
+    if not matches_by_entry:
+        raise ValueError(
+            "Could not find TOC entries in PDF while calculating page offset"
+        )
+
+    candidate_offsets = Counter(
+        page_number - entry[1].book_page_start
+        for entry, page_numbers in matches_by_entry
+        for page_number in page_numbers
+    )
+
+    scored_offsets: list[tuple[int, int, int]] = []
+    for offset in candidate_offsets:
+        support = 0
+        distance = 0
+        for entry, page_numbers in matches_by_entry:
+            expected_page = entry[1].book_page_start + offset
+            nearest_distance = min(
+                abs(page_number - expected_page) for page_number in page_numbers
+            )
+            if nearest_distance <= 1:
+                support += 1
+                distance += nearest_distance
+        scored_offsets.append((support, -distance, offset))
+
+    support, _, offset = max(scored_offsets)
+    required_support = max(2, (len(matches_by_entry) + 1) // 2)
+    if support < required_support:
+        raise ValueError(
+            "Could not determine a consistent page offset: "
+            f"{support}/{len(matches_by_entry)} anchors agree"
+        )
+
+    return offset
+
+
 def _get_file_end(
     index: int,
     entries: list[tuple[str, TableOfContentsEntry]],
@@ -194,9 +231,8 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
                 "'Параграф', 'Пункт', 'Раздел', 'Тема' exactly as in the source text. "
                 "Do not output a separate entry for a chapter or paragraph if it is only a "
                 "parent heading; only the most granular section should be kept. "
-                "Return a JSON object with top-level keys 'paragraphs' and 'chapters', "
-                "but in practice the final leaf entries should usually go under 'paragraphs'; "
-                "'chapters' is only for true chapter-root entries when no deeper leaf exists. "
+                "Return a JSON object with the single top-level key 'paragraphs'. "
+                "Never return chapters, parent headings, or any non-leaf section. "
                 "Never assign the same book_page_start to two different entries, even if "
                 "their titles look similar or belong to different nesting levels."
             ),
@@ -206,27 +242,6 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
             "content": f"----- scanned pdf text -----\n{text}",
         },
     ]
-
-    try:
-        response = await client.chat.completions.parse(
-            model=settings.openai_model,
-            messages=messages,
-            response_format=TableOfContents,
-        )
-        if response is not None and getattr(response, "choices", None):
-            parsed = response.choices[0].message.parsed
-            if parsed is not None:
-                return parsed
-
-            content = response.choices[0].message.content
-            if content:
-                payload = json.loads(content)
-                if isinstance(payload, dict):
-                    return TableOfContents.model_validate(
-                        _normalize_toc_payload(payload)
-                    )
-    except (AttributeError, TypeError, ValueError):
-        pass
 
     response = await client.chat.completions.create(
         model=settings.openai_model,
@@ -259,19 +274,14 @@ async def parse_book(
         _extract_toc_text(reader),
         client if client is not None else get_async_openai_client(),
     )
-    if not toc.paragraphs and not toc.chapters:
+    if not toc.paragraphs:
         raise ValueError("LLM returned an empty table of contents")
 
     ordered_paragraphs = sorted(
         toc.paragraphs.items(), key=lambda item: item[1].book_page_start
     )
-    ordered_chapters = sorted(
-        toc.chapters.items(), key=lambda item: item[1].book_page_start
-    )
 
-    first_entry = (ordered_paragraphs or ordered_chapters)[0][1]
-    first_file_start = _find_title_page(reader, first_entry.title)
-    page_offset = first_file_start - first_entry.book_page_start
+    page_offset = _find_page_offset(reader, ordered_paragraphs)
 
     paragraphs: dict[str, BookParagraph] = {}
     for index, (number, entry) in enumerate(ordered_paragraphs):
@@ -281,26 +291,14 @@ async def parse_book(
         )
 
         if file_start < 0 or file_start >= len(reader.pages) or file_end < file_start:
-            raise ValueError(f"Invalid page range for paragraph: {number}")
+            raise ValueError(
+                f"Invalid page range for paragraph {number}: "
+                f"title={entry.title!r}, book_page_start={entry.book_page_start}, "
+                f"file_start={file_start}, file_end={file_end}, "
+                f"page_offset={page_offset}, page_count={len(reader.pages)}"
+            )
 
         paragraphs[number] = BookParagraph(
-            title=entry.title,
-            book_page_start=entry.book_page_start,
-            file_start=file_start,
-            file_end=min(file_end, len(reader.pages) - 1),
-        )
-
-    chapters: dict[str, BookChapter] = {}
-    for index, (number, entry) in enumerate(ordered_chapters):
-        file_start = entry.book_page_start + page_offset
-        file_end = _get_file_end(
-            index, ordered_chapters, page_offset, len(reader.pages)
-        )
-
-        if file_start < 0 or file_start >= len(reader.pages) or file_end < file_start:
-            raise ValueError(f"Invalid page range for chapter: {number}")
-
-        chapters[number] = BookChapter(
             title=entry.title,
             book_page_start=entry.book_page_start,
             file_start=file_start,
@@ -312,6 +310,5 @@ async def parse_book(
         pdf_path=pdf_path,
         created_at=datetime.datetime.now(datetime.UTC).date(),
         paragraphs=paragraphs,
-        chapters=chapters,
     )
     return metadata
