@@ -7,7 +7,6 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, model_validator
 from pypdf import PdfReader
 
-from app.books import BooksRepository
 from app.models import BookChapter, BookMetadata, BookParagraph
 from app.openai import get_async_openai_client
 from app.settings import settings
@@ -309,10 +308,10 @@ async def parse_book(
         )
 
     metadata = BookMetadata(
+        title="",
         pdf_path=pdf_path,
         created_at=datetime.datetime.now(datetime.UTC).date(),
         paragraphs=paragraphs,
         chapters=chapters,
     )
-    BooksRepository().add_book(metadata)
     return metadata
