@@ -1,0 +1,111 @@
+from maxapi import F, Router
+from maxapi.context import MemoryContext
+from maxapi.methods.types.sended_message import SendedMessage
+from maxapi.types import CallbackButton, MessageCreated
+from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
+
+from app.books import BooksRepository
+from app.bot import get_bot
+from app.handlers.manage_books.utils import compile_books_list
+from app.logics.summary_generator import AbstractGenerationError, ParagraphAbstractor
+from app.states import Summarize
+
+router = Router()
+
+
+def exit_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(CallbackButton(text="Выйти", payload="Summarize.chat_mode:exit"))
+    return builder.as_markup()
+
+
+def cancel_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(CallbackButton(text="Отмена", payload="cancel"))
+    return builder.as_markup()
+
+
+@router.message_created(F.message.body.text == "Конспект")
+async def start_summarize(event: MessageCreated, context: MemoryContext):
+    await context.set_state(Summarize.select_book)
+
+    books = BooksRepository().list_books()
+    await context.update_data(books=books)
+    if not books:
+        await event.message.reply(text="У вас пока нет загруженных учебников.")
+        return
+
+    text = f"Выберите книгу:\n{'\n'.join(compile_books_list(books))}"
+
+    await event.message.reply(text=text, attachments=[cancel_keyboard()])
+
+
+@router.message_created(F.message.body.text, Summarize.select_book)
+async def select_book(event: MessageCreated, context: MemoryContext):
+    data = await context.get_data()
+    books = data.get("books", [])
+    body = event.message.body
+    if body is None or body.text is None:
+        return
+    try:
+        index = int(body.text) - 1
+    except ValueError:
+        await event.message.reply(text="Введите номер книги.")
+        return
+
+    if index < 0 or index >= len(books) or books[index][2] == "processing":
+        await event.message.reply(text="Такой книги нет или она ещё обрабатывается.")
+        return
+
+    book = BooksRepository().get_book(books[index][1])
+    paragraphs = list(book.metadata.paragraphs.items())
+    await context.update_data(book_path=books[index][1], paragraphs=paragraphs)
+    await context.set_state(Summarize.select_paragraphs)
+
+    lines = [f"{number} - {entry.title}" for number, entry in paragraphs]
+    await event.message.reply(
+        text="Выберите номера параграфов через запятую:\n" + "\n".join(lines),
+        attachments=[cancel_keyboard()],
+    )
+
+
+@router.message_created(F.message.body.text, Summarize.select_paragraphs)
+async def select_paragraphs(event: MessageCreated, context: MemoryContext):
+    data = await context.get_data()
+    paragraphs = dict(data.get("paragraphs", []))
+    body = event.message.body
+    if body is None or body.text is None:
+        return
+    selected_ids = [item.strip() for item in body.text.split(",")]
+    if not selected_ids or any(item not in paragraphs for item in selected_ids):
+        await event.message.reply(text="Укажите существующие номера через запятую.")
+        return
+
+    await context.set_state(Summarize.chat_mode)
+    processing_message = await event.message.answer(text="Готовлю конспект ⏳")
+    book = BooksRepository().get_book(data["book_path"])
+    paragraph_text = await book.get_text(selected_ids)
+
+    try:
+        summary = await ParagraphAbstractor().summarize_async(paragraph_text)
+    except AbstractGenerationError:
+        await _delete_processing_message(processing_message)
+        await context.set_state(Summarize.select_paragraphs)
+        await event.message.answer(text="Не удалось подготовить конспект.")
+        return
+
+    await _delete_processing_message(processing_message)
+    summary = _truncate_summary(summary)
+    await event.message.answer(text=summary)
+
+
+def _truncate_summary(summary: str) -> str:
+    if len(summary) <= 3900:
+        return summary
+    return summary[:3900] + "..."
+
+
+async def _delete_processing_message(message: SendedMessage | None) -> None:
+    if message is None or message.message is None or message.message.body is None:
+        return
+    await get_bot().delete_message(message.message.body.mid)
