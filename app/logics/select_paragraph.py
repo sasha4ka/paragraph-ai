@@ -87,7 +87,9 @@ async def select_paragraphs(
             ) from exc
 
     selected_ids = list(dict.fromkeys(parsed.paragraph_ids))
-    unknown_ids = [paragraph_id for paragraph_id in selected_ids if paragraph_id not in catalog]
+    unknown_ids = [
+        paragraph_id for paragraph_id in selected_ids if paragraph_id not in catalog
+    ]
     if unknown_ids:
         raise ParagraphSelectionError(
             "Модель выбрала отсутствующие параграфы: " + ", ".join(unknown_ids)

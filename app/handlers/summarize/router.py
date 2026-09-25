@@ -9,6 +9,8 @@ from app.bot import get_bot
 from app.handlers.manage_books.utils import compile_books_list
 from app.logics.select_paragraph import (
     ParagraphSelectionError,
+)
+from app.logics.select_paragraph import (
     select_paragraphs as resolve_paragraphs,
 )
 from app.logics.summary_generator import AbstractGenerationError, ParagraphAbstractor
