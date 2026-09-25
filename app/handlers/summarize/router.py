@@ -114,10 +114,12 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         logger.exception(f"Error generating summary {user_id=}")
         return
 
-    if len(summary_blocks) > 10:
+    if len(summary_blocks) > 20:
         await event.message.answer(text="Не удалось подготовить конспект.")
         user_id = event.message.sender.user_id
-        logger.error(f"Too big summary. can not send to max api {user_id=}")
+        logger.error(
+            f"Too big summary ({len(summary_blocks)} blocks). can not send to max api {user_id=}"
+        )
         return
 
     await _delete_processing_message(processing_message)
