@@ -220,3 +220,6 @@ app/logics/Химия 10 класс.pdf
 
 # Streamlit
 .streamlit/secrets.toml
+
+cache/
+books/

@@ -9,5 +9,9 @@ class Settings(BaseSettings):
     )
 
     api_token: str | None = None
-    routerai_api_key: str | None = None
-    model: str = "openai/gpt-6-luna"
+    openai_base_url: str = "https://routerai.ru/api/v1"
+    openai_model: str = "openai/gpt-6-luna"
+    openai_api_token: str | None = None
+
+
+settings = Settings()  # type: ignore

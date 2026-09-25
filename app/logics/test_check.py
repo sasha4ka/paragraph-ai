@@ -15,7 +15,7 @@ from openai import (
     OpenAI,
 )
 
-from app.settings import Settings
+from app.settings import settings
 
 
 class AnswerCheckError(RuntimeError):
@@ -113,9 +113,8 @@ class AnswerChecker:
         async_client: AsyncOpenAI | None = None,
     ) -> None:
         if api_key is None or model is None:
-            settings = Settings()
-            api_key = api_key or settings.routerai_api_key
-            model = model or settings.model
+            api_key = api_key or settings.openai_api_token
+            model = model or settings.openai_model
 
         if not api_key or not api_key.strip():
             raise ValueError("RouterAI API key must not be empty")
@@ -128,6 +127,7 @@ class AnswerChecker:
         self.user_answers = dict(user_answers)
         self.api_key = api_key
         self.model = model
+        self.base_url = settings.openai_base_url or self.BASE_URL
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.client = client
@@ -385,7 +385,7 @@ class AnswerChecker:
                 else:
                     with OpenAI(
                         api_key=self.api_key,
-                        base_url=self.BASE_URL,
+                        base_url=self.base_url,
                         timeout=self.timeout,
                     ) as client:
                         response = client.chat.completions.create(**payload)
@@ -418,7 +418,7 @@ class AnswerChecker:
                 else:
                     async with AsyncOpenAI(
                         api_key=self.api_key,
-                        base_url=self.BASE_URL,
+                        base_url=self.base_url,
                         timeout=self.timeout,
                     ) as client:
                         response = await client.chat.completions.create(**payload)
