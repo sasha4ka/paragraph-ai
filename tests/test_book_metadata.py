@@ -1,5 +1,6 @@
 import pytest
 
+from app.handlers.summarize.router import _truncate_summary
 from app.logics.parser import (
     TableOfContentsEntry,
     _find_page_offset,
@@ -72,6 +73,15 @@ def test_file_end_includes_page_where_next_section_starts():
     ]
 
     assert _get_file_end(0, entries, page_offset=3, page_count=20) == 15
+
+
+def test_summary_is_truncated_after_3900_characters():
+    summary = "x" * 4000
+
+    truncated = _truncate_summary(summary)
+
+    assert len(truncated) == 3903
+    assert truncated == "x" * 3900 + "..."
 
 
 def test_find_page_offset_uses_consensus_of_multiple_entries():

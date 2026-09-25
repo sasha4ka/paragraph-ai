@@ -22,10 +22,7 @@ class Book:
     async def get_text(self, section_ids: list[str]) -> str:
         pages: set[int] = set()
         for section_id in section_ids:
-            section = next(
-                (item for item in self.metadata.sections if item.id == section_id),
-                None,
-            )
+            section = self.metadata.paragraphs.get(section_id)
             if section is None:
                 continue
             pages.update(range(section.file_start, section.file_end + 1))

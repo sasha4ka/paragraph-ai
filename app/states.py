@@ -6,3 +6,9 @@ class ManageBooks(StatesGroup):
     upload_book = State()
     select_book_name = State()
     select_for_delete = State()
+
+
+class Summarize(StatesGroup):
+    select_book = State()
+    select_paragraphs = State()
+    chat_mode = State()
