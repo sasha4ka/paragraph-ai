@@ -6,9 +6,15 @@ from pydantic import BaseModel, Field, model_validator
 
 class BookEntry(BaseModel):
     title: str
-    book_page_start: int
-    file_start: int = 0
-    file_end: int = 0
+    book_page_start: int = Field(ge=1)
+    file_start: int = Field(default=0, ge=0)
+    file_end: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_file_range(self) -> "BookEntry":
+        if self.file_end < self.file_start:
+            raise ValueError("file_end must be greater than or equal to file_start")
+        return self
 
 
 class BookParagraph(BookEntry):
