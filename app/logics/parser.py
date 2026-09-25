@@ -244,7 +244,7 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
     ]
 
     response = await client.chat.completions.create(
-        model=settings.openai_model,
+        model=settings.parsing_model,
         response_format={"type": "json_object"},
         messages=messages,
     )

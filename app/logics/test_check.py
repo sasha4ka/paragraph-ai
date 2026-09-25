@@ -115,7 +115,7 @@ class AnswerChecker:
     ) -> None:
         if api_key is None or model is None:
             api_key = api_key or settings.openai_api_token
-            model = model or settings.openai_model
+            model = model or settings.default_model
 
         if not api_key or not api_key.strip():
             raise ValueError("RouterAI API key must not be empty")

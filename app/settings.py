@@ -10,7 +10,8 @@ class Settings(BaseSettings):
 
     api_token: str | None = None
     openai_base_url: str = "https://routerai.ru/api/v1"
-    openai_model: str = "openai/gpt-6-luna"
+    default_model: str = "openai/gpt-6-luna"
+    parsing_model: str = "deepseek/deepseek-v4.1-flash"
     openai_api_token: str | None = None
 
 
