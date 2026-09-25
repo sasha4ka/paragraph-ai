@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Literal, Self, cast
@@ -7,6 +8,9 @@ from pypdf import PdfReader
 
 from app.logics.parser import parse_book
 from app.models import BookMetadata
+
+logger = logging.getLogger("Book Repository")
+logger.setLevel(logging.INFO)
 
 
 class Book:
@@ -54,9 +58,15 @@ class BooksRepository:
         self.metadata_dir = self.books_dir / "metadata"
         self._books = {}
 
-        for name in os.listdir(self.metadata_dir):
+    def load_library(self):
+        logger.info("Loading library:")
+        files = os.listdir(self.metadata_dir)
+        if not files:
+            logger.info("Library is empty")
+        for name in files:
             metadata_path = self.metadata_dir / name
             self.get_book(metadata_path)
+            logger.info(f"loaded {metadata_path}")
 
     def get_book(self, book_path: str | Path) -> Book:
         book_path = Path(book_path)
