@@ -3,6 +3,7 @@ import logging
 
 from maxapi import F, Router
 from maxapi.context import MemoryContext
+from maxapi.enums import ParseMode
 from maxapi.methods.types.sended_message import SendedMessage
 from maxapi.types import CallbackButton, MessageCreated
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
@@ -125,7 +126,7 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     await _delete_processing_message(processing_message)
     for block in summary_blocks:
         block = _truncate_summary(block)
-        await event.message.answer(text=block)
+        await event.message.answer(text=block, parse_mode=ParseMode.HTML)
         await asyncio.sleep(0.5)
 
 
