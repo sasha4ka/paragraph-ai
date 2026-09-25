@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from maxapi import F, Router
 from maxapi.context import MemoryContext
 from maxapi.methods.types.sended_message import SendedMessage
@@ -17,6 +20,8 @@ from app.logics.summary_generator import AbstractGenerationError, ParagraphAbstr
 from app.states import Summarize
 
 router = Router()
+
+logger = logging.getLogger("summarize router")
 
 
 def exit_keyboard():
@@ -99,16 +104,26 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     paragraph_text = await book.get_text(selected_ids)
 
     try:
-        summary = await ParagraphAbstractor().summarize_async(paragraph_text)
+        summary_blocks = await ParagraphAbstractor().summarize_async(paragraph_text)
     except AbstractGenerationError:
         await _delete_processing_message(processing_message)
         await context.set_state(Summarize.select_paragraphs)
         await event.message.answer(text="Не удалось подготовить конспект.")
+        user_id = event.message.sender.user_id
+        logger.exception(f"Error generating summary {user_id=}")
+        return
+
+    if len(summary_blocks) > 10:
+        await event.message.answer(text="Не удалось подготовить конспект.")
+        user_id = event.message.sender.user_id
+        logger.error(f"Too big summary. can not send to max api {user_id=}")
         return
 
     await _delete_processing_message(processing_message)
-    summary = _truncate_summary(summary)
-    await event.message.answer(text=summary)
+    for block in summary_blocks:
+        block = _truncate_summary(block)
+        await event.message.answer(text=block)
+        await asyncio.sleep(0.5)
 
 
 def _truncate_summary(summary: str) -> str:
