@@ -134,13 +134,13 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
 
     async def _parse_book(path: Path):
         await BooksRepository().parse_then_add_book(path, title=data["book_name"])
+        await books_menu(context)
         if await context.get_state() == ManageBooks.main_menu:
             await books_menu(context=context)
 
     try:
         path = await download_file(_filename, file.payload.url)
         asyncio.create_task(_parse_book(path))
-        await books_menu(context)
         return
 
     except InvalidPath:
