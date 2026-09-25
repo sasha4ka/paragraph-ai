@@ -6,8 +6,13 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypedDict
 
-from openai import APIError, AsyncOpenAI, OpenAI
-
+from app.openai import (
+    APIError,
+    AsyncOpenAI,
+    OpenAI,
+    get_async_openai_client,
+    get_openai_client,
+)
 from app.settings import settings
 
 
@@ -126,7 +131,7 @@ class Communication:
             if self.client:
                 response = self.client.chat.completions.create(**self._payload())
             else:
-                with OpenAI(
+                with get_openai_client(
                     api_key=self.api_key,
                     base_url=settings.openai_base_url,
                     timeout=self.timeout,
@@ -144,7 +149,7 @@ class Communication:
                     **self._payload()
                 )
             else:
-                async with AsyncOpenAI(
+                async with get_async_openai_client(
                     api_key=self.api_key,
                     base_url=settings.openai_base_url,
                     timeout=self.timeout,

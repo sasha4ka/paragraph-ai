@@ -6,14 +6,15 @@ import json
 import re
 from typing import Any, TypedDict
 
-from openai import (
+from app.openai import (
     APIConnectionError,
     APIError,
     APITimeoutError,
     AsyncOpenAI,
     OpenAI,
+    get_async_openai_client,
+    get_openai_client,
 )
-
 from app.settings import settings
 
 __test__ = False
@@ -314,7 +315,7 @@ correct_option — индекс правильного варианта A или
             if self.client is not None:
                 response = self.client.chat.completions.create(**payload)
             else:
-                with OpenAI(
+                with get_openai_client(
                     api_key=self.api_key,
                     base_url=self.base_url,
                     timeout=self.timeout,
@@ -336,7 +337,7 @@ correct_option — индекс правильного варианта A или
             if self.async_client is not None:
                 response = await self.async_client.chat.completions.create(**payload)
             else:
-                async with AsyncOpenAI(
+                async with get_async_openai_client(
                     api_key=self.api_key,
                     base_url=self.base_url,
                     timeout=self.timeout,

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.logics.Communication import Communication
+from app.logics.communication import Communication
 
 
 class FakeCompletions:

@@ -7,14 +7,15 @@ import re
 from collections.abc import Mapping
 from typing import Any, ClassVar, TypedDict
 
-from openai import (
+from app.openai import (
     APIConnectionError,
     APIError,
     APITimeoutError,
     AsyncOpenAI,
     OpenAI,
+    get_async_openai_client,
+    get_openai_client,
 )
-
 from app.settings import settings
 
 
@@ -383,7 +384,7 @@ class AnswerChecker:
                 if self.client is not None:
                     response = self.client.chat.completions.create(**payload)
                 else:
-                    with OpenAI(
+                    with get_openai_client(
                         api_key=self.api_key,
                         base_url=self.base_url,
                         timeout=self.timeout,
@@ -416,7 +417,7 @@ class AnswerChecker:
                         **payload
                     )
                 else:
-                    async with AsyncOpenAI(
+                    async with get_async_openai_client(
                         api_key=self.api_key,
                         base_url=self.base_url,
                         timeout=self.timeout,
