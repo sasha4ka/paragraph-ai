@@ -21,16 +21,11 @@ class BookParagraph(BookEntry):
     pass
 
 
-class BookChapter(BookEntry):
-    pass
-
-
 class BookMetadata(BaseModel):
-    title: str | None
+    title: str | None = None
     pdf_path: Path
     created_at: datetime.date
     paragraphs: dict[str, BookParagraph] = Field(default_factory=dict)
-    chapters: dict[str, BookChapter] = Field(default_factory=dict)
 
     @staticmethod
     def _validate_unique_starts(entries: dict[str, BookEntry], category: str) -> None:
@@ -44,15 +39,4 @@ class BookMetadata(BaseModel):
     @model_validator(mode="after")
     def validate_unique_starts(self) -> "BookMetadata":
         self._validate_unique_starts(self.paragraphs, "paragraphs")
-        self._validate_unique_starts(self.chapters, "chapters")
-
-        paragraph_starts = {entry.book_page_start for entry in self.paragraphs.values()}
-        chapter_starts = {entry.book_page_start for entry in self.chapters.values()}
-        shared_starts = sorted(paragraph_starts & chapter_starts)
-        if shared_starts:
-            raise ValueError(
-                "Duplicate book_page_start values across paragraphs and chapters: "
-                f"{shared_starts}"
-            )
-
         return self
