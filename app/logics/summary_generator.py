@@ -39,6 +39,7 @@ class ParagraphAbstractor:
 
     BASE_URL = "https://routerai.ru/api/v1"
     DEFAULT_MODEL = "openai/gpt-6-luna"
+    MAX_BLOCK_LENGTH = 4_000
     SYSTEM_PROMPT = """Ты составляешь точные и понятные учебные конспекты.
 Работай только с информацией из переданного параграфа и ничего не выдумывай.
 
@@ -148,8 +149,33 @@ class ParagraphAbstractor:
             raise AbstractGenerationError("RouterAI returned an empty outline")
         return result
 
-    def summarize(self, paragraph_text: str) -> str:
-        """Synchronously generate and return an outline for ``paragraph_text``."""
+    @classmethod
+    def _split_into_blocks(cls, text: str) -> list[str]:
+        """Split an outline into MAX-compatible messages without losing text."""
+        remaining = text.strip()
+        blocks: list[str] = []
+
+        while len(remaining) > cls.MAX_BLOCK_LENGTH:
+            window = remaining[: cls.MAX_BLOCK_LENGTH + 1]
+            cut = cls.MAX_BLOCK_LENGTH
+
+            for separator in ("\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " "):
+                position = window.rfind(separator)
+                if position >= cls.MAX_BLOCK_LENGTH // 2:
+                    cut = position + len(separator)
+                    break
+
+            block = remaining[:cut].strip()
+            if block:
+                blocks.append(block)
+            remaining = remaining[cut:].strip()
+
+        if remaining:
+            blocks.append(remaining)
+        return blocks
+
+    def summarize(self, paragraph_text: str) -> list[str]:
+        """Synchronously return an outline split into messages up to 4000 chars."""
         payload = self._build_payload(paragraph_text)
         try:
             if self.client is not None:
@@ -168,10 +194,10 @@ class ParagraphAbstractor:
         except APIError as exc:
             raise AbstractGenerationError(f"RouterAI API error: {exc}") from exc
 
-        return self._parse_response(response)
+        return self._split_into_blocks(self._parse_response(response))
 
-    async def summarize_async(self, paragraph_text: str) -> str:
-        """Asynchronously generate and return an outline for ``paragraph_text``."""
+    async def summarize_async(self, paragraph_text: str) -> list[str]:
+        """Asynchronously return an outline split into messages up to 4000 chars."""
         payload = self._build_payload(paragraph_text)
         try:
             if self.async_client is not None:
@@ -190,7 +216,7 @@ class ParagraphAbstractor:
         except APIError as exc:
             raise AbstractGenerationError(f"RouterAI API error: {exc}") from exc
 
-        return self._parse_response(response)
+        return self._split_into_blocks(self._parse_response(response))
 
 
 # Short aliases for convenient imports in handlers.
