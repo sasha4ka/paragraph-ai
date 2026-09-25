@@ -97,33 +97,6 @@ def _title_candidates(title: str) -> list[str]:
     return [" - ".join(parts[index:]) for index in range(len(parts))]
 
 
-def _find_title_page(reader: PdfReader, title: str) -> int:
-    normalized_titles = [
-        _normalize_text(candidate) for candidate in _title_candidates(title)
-    ]
-    page_count = len(reader.pages)
-    preferred_pages = range(10, max(10, page_count - 10))
-    fallback_pages = range(page_count)
-
-    for page_numbers in (preferred_pages, fallback_pages):
-        page_texts = {
-            page_number: _normalize_text(reader.pages[page_number].extract_text() or "")
-            for page_number in page_numbers
-        }
-        for normalized_title in normalized_titles:
-            if not normalized_title:
-                continue
-            matches = [
-                page_number
-                for page_number, page_text in page_texts.items()
-                if normalized_title in page_text
-            ]
-            if matches:
-                return matches[0]
-
-    raise ValueError(f"Could not find paragraph title in PDF: {title}")
-
-
 def _find_title_pages(reader: PdfReader, title: str) -> list[int]:
     page_count = len(reader.pages)
     preferred_pages = list(range(10, max(10, page_count - 10)))
