@@ -7,6 +7,10 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from app.books import BooksRepository
 from app.bot import get_bot
 from app.handlers.manage_books.utils import compile_books_list
+from app.logics.select_paragraph import (
+    ParagraphSelectionError,
+    select_paragraphs as resolve_paragraphs,
+)
 from app.logics.summary_generator import AbstractGenerationError, ParagraphAbstractor
 from app.states import Summarize
 
@@ -62,9 +66,11 @@ async def select_book(event: MessageCreated, context: MemoryContext):
     await context.update_data(book_path=books[index][1], paragraphs=paragraphs)
     await context.set_state(Summarize.select_paragraphs)
 
-    lines = [f"{number} - {entry.title}" for number, entry in paragraphs]
     await event.message.reply(
-        text="Выберите номера параграфов через запятую:\n" + "\n".join(lines),
+        text=(
+            "Введите название одного или нескольких параграфов. "
+            "Если выбираете несколько, разделите названия запятыми."
+        ),
         attachments=[cancel_keyboard()],
     )
 
@@ -76,9 +82,13 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     body = event.message.body
     if body is None or body.text is None:
         return
-    selected_ids = [item.strip() for item in body.text.split(",")]
-    if not selected_ids or any(item not in paragraphs for item in selected_ids):
-        await event.message.reply(text="Укажите существующие номера через запятую.")
+    paragraph_titles = {
+        paragraph_id: paragraph.title for paragraph_id, paragraph in paragraphs.items()
+    }
+    try:
+        selected_ids = await resolve_paragraphs(body.text, paragraph_titles)
+    except ParagraphSelectionError as exc:
+        await event.message.reply(text=str(exc))
         return
 
     await context.set_state(Summarize.chat_mode)
