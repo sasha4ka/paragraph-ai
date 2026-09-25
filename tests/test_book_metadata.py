@@ -12,6 +12,7 @@ from app.models import BookChapter, BookMetadata, BookParagraph
 def test_duplicate_paragraph_book_page_starts_are_rejected():
     with pytest.raises(ValueError, match="Duplicate book_page_start"):
         BookMetadata(
+            title=None,
             pdf_path="books/test.pdf",
             created_at="2026-09-24",
             paragraphs={
@@ -64,10 +65,11 @@ def test_find_title_page_matches_leaf_of_hierarchical_title():
             return self.text
 
     class Reader:
-        pages = [
-            Page("1 Предмет стереометрии"),
-            Page("Оглавление: 1. Предмет стереометрии 3"),
-        ]
+        def __init__(self):
+            self.pages = [
+                Page("1 Предмет стереометрии"),
+                Page("Оглавление: 1. Предмет стереометрии 3"),
+            ]
 
     assert _find_title_page(Reader(), "Введение - 1. Предмет стереометрии") == 0
 
