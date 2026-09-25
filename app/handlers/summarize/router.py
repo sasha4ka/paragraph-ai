@@ -43,12 +43,12 @@ async def start_summarize(event: MessageCreated, context: MemoryContext):
     books = BooksRepository().list_books()
     await context.update_data(books=books)
     if not books:
-        await event.message.reply(text="У вас пока нет загруженных учебников.")
+        await event.message.answer(text="У вас пока нет загруженных учебников.")
         return
 
     text = f"Выберите книгу:\n{'\n'.join(compile_books_list(books))}"
 
-    await event.message.reply(text=text, attachments=[cancel_keyboard()])
+    await event.message.answer(text=text, attachments=[cancel_keyboard()])
 
 
 @router.message_created(F.message.body.text, Summarize.select_book)
@@ -61,11 +61,11 @@ async def select_book(event: MessageCreated, context: MemoryContext):
     try:
         index = int(body.text) - 1
     except ValueError:
-        await event.message.reply(text="Введите номер книги.")
+        await event.message.answer(text="Введите номер книги.")
         return
 
     if index < 0 or index >= len(books) or books[index][2] == "processing":
-        await event.message.reply(text="Такой книги нет или она ещё обрабатывается.")
+        await event.message.answer(text="Такой книги нет или она ещё обрабатывается.")
         return
 
     book = BooksRepository().get_book(books[index][1])
@@ -73,7 +73,7 @@ async def select_book(event: MessageCreated, context: MemoryContext):
     await context.update_data(book_path=books[index][1], paragraphs=paragraphs)
     await context.set_state(Summarize.select_paragraphs)
 
-    await event.message.reply(
+    await event.message.answer(
         text=(
             "Введите название одного или нескольких параграфов. "
             "Если выбираете несколько, разделите названия запятыми."
@@ -95,7 +95,7 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     try:
         selected_ids = await resolve_paragraphs(body.text, paragraph_titles)
     except ParagraphSelectionError as exc:
-        await event.message.reply(text=str(exc))
+        await event.message.answer(text=str(exc))
         return
 
     await context.set_state(Summarize.chat_mode)
