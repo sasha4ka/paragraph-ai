@@ -9,6 +9,7 @@ from pypdf import PdfReader
 
 from app.books import BooksRepository
 from app.models import BookChapter, BookMetadata, BookParagraph
+from app.openai import get_async_openai_client
 from app.settings import settings
 
 
@@ -177,16 +178,6 @@ def _get_file_end(
     return page_count - 1
 
 
-def _get_llm_client() -> AsyncOpenAI:
-    if not settings.openai_api_token:
-        raise ValueError("OPENAI_API_KEY must be set to parse a book")
-
-    return AsyncOpenAI(
-        api_key=settings.openai_api_token,
-        base_url=settings.openai_base_url,
-    )
-
-
 async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfContents:
     messages = [
         {
@@ -252,7 +243,7 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
 
     payload = json.loads(content)
     if not isinstance(payload, dict):
-        raise ValueError("LLM returned an invalid table of contents format")
+        raise TypeError("LLM returned an invalid table of contents format")
 
     return TableOfContents.model_validate(_normalize_toc_payload(payload))
 
@@ -266,7 +257,8 @@ async def parse_book(
         raise ValueError(f"PDF contains no pages: {pdf_path}")
 
     toc = await _parse_table_of_contents(
-        _extract_toc_text(reader), client if client is not None else _get_llm_client()
+        _extract_toc_text(reader),
+        client if client is not None else get_async_openai_client(),
     )
     if not toc.paragraphs and not toc.chapters:
         raise ValueError("LLM returned an empty table of contents")
