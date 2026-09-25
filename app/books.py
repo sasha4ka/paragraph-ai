@@ -1,10 +1,16 @@
 import json
+import logging
+import os
 from pathlib import Path
-from typing import Self, cast
+from typing import Literal, Self, cast
 
 from pypdf import PdfReader
 
+from app.logics.parser import parse_book
 from app.models import BookMetadata
+
+logger = logging.getLogger("Book Repository")
+logger.setLevel(logging.INFO)
 
 
 class Book:
@@ -31,8 +37,12 @@ class Book:
         )
 
 
+type BookObject = tuple[str, Path, Literal["parsed", "processing"]]
+
+
 class BooksRepository:
     _instance: "BooksRepository | None" = None
+    _books: dict[Path, BookObject]
 
     def __new__(cls, books_dir: str | Path = "books") -> Self:
         if cls._instance is None:
@@ -46,6 +56,17 @@ class BooksRepository:
     def _initialize(self, books_dir: str | Path) -> None:
         self.books_dir = Path(books_dir)
         self.metadata_dir = self.books_dir / "metadata"
+        self._books = {}
+
+    def load_library(self):
+        logger.info("Loading library:")
+        files = os.listdir(self.metadata_dir)
+        if not files:
+            logger.info("Library is empty")
+        for name in files:
+            metadata_path = self.metadata_dir / name
+            self.get_book(metadata_path)
+            logger.info(f"loaded {metadata_path}")
 
     def get_book(self, book_path: str | Path) -> Book:
         book_path = Path(book_path)
@@ -58,6 +79,12 @@ class BooksRepository:
         with metadata_path.open(encoding="utf-8") as metadata_file:
             metadata = BookMetadata.model_validate(json.load(metadata_file))
 
+        self._books[metadata_path] = (
+            metadata.title or "unknown book",
+            metadata_path,
+            "parsed",
+        )
+
         return Book(metadata)
 
     def add_book(self, metadata: BookMetadata) -> Book:
@@ -69,7 +96,37 @@ class BooksRepository:
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         metadata_path.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
 
+        book_name = metadata.title or "unknown book"
+        self._books[metadata_path] = (book_name, metadata_path, "parsed")
+
         return Book(metadata)
+
+    async def parse_then_add_book(
+        self, path: Path | str, title: str = "unknown book"
+    ) -> Book:
+        book_path = Path(path)
+        metadata_path = self.metadata_dir / f"{book_path.stem}.json"
+        self._books[metadata_path] = (title, metadata_path, "processing")
+        metadata = await parse_book(book_path)
+        metadata.title = title
+        return self.add_book(metadata)
+
+    def delete_book(self, path: Path | str):
+        metadata_path = Path(path)
+
+        if metadata_path not in self._books:
+            return False
+
+        book = self.get_book(metadata_path)
+
+        os.remove(book.metadata.pdf_path)
+        os.remove(metadata_path)
+        self._books.pop(metadata_path)
+
+        return True
+
+    def list_books(self) -> list[BookObject]:
+        return list(self._books.values())
 
     def _resolve_book_path(self, book_path: Path) -> Path:
         if book_path.is_absolute():

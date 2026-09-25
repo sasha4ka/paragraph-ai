@@ -26,6 +26,7 @@ class BookChapter(BookEntry):
 
 
 class BookMetadata(BaseModel):
+    title: str | None
     pdf_path: Path
     created_at: datetime.date
     paragraphs: dict[str, BookParagraph] = Field(default_factory=dict)

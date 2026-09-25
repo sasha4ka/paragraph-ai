@@ -1,5 +1,6 @@
+import asyncio
 import logging
-import os
+from pathlib import Path
 from typing import Any, TypedDict
 
 from maxapi import F, Router
@@ -7,14 +8,13 @@ from maxapi.context import MemoryContext
 from maxapi.types import Command, MessageCallback, MessageCreated
 from maxapi.types.attachments import File
 
+from app.books import BookObject, BooksRepository
 from app.bot import get_bot
 from app.exc import DownloadError, InvalidPath
 from app.handlers.manage_books.keyboards import cancel_keyboard, menu_keyboard
 from app.handlers.manage_books.utils import (
-    cache_dir,
-    delete_book,
+    compile_books_list,
     download_file,
-    list_books,
 )
 from app.states import ManageBooks
 
@@ -37,8 +37,8 @@ async def books_menu(context: MemoryContext, chat_id: int | None = None):
         data: dict[str, Any] = {"menu_chat_id": 0, "menu_message_id": ""}
     data = ManageBooksData(**data)
 
-    _books = list_books()
-    _books = [f"{i + 1}. {name}" for i, name in enumerate(_books)]
+    _books = compile_books_list(BooksRepository().list_books())
+
     if _books:
         text = f"Ваши учебники:\n{'\n'.join(_books)}"
     else:
@@ -80,12 +80,16 @@ async def select_book_name(event: MessageCallback, context: MemoryContext):
 async def select_book_for_delete(event: MessageCallback, context: MemoryContext):
     await context.set_state(ManageBooks.select_for_delete)
     message_id = ManageBooksData(**(await context.get_data()))["menu_message_id"]
-    filenames = sorted(os.listdir(cache_dir))
-    books = [f"{i + 1}. {name}" for i, name in enumerate(filenames)]
-    if books:
-        text = f"Ваши учебники:\n{chr(10).join(books)}\nВведите номер учебника, который хотите удалить"
+
+    _books = BooksRepository().list_books()
+    await context.update_data(books=_books)
+
+    _compiled_books = compile_books_list(_books)
+    if _books:
+        text = f"Ваши учебники:\n{'\n'.join(_compiled_books)}\nВведите номер учебника, который хотите удалить"
     else:
         text = "Кажется у вас еще нет учебников..."
+
     await get_bot().edit_message(
         message_id=message_id,
         text=text,
@@ -128,8 +132,14 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
     _extension = _original_filename[-1]
     _filename = f"{data['book_name']}.{_extension}"
 
+    async def _parse_book(path: Path):
+        await BooksRepository().parse_then_add_book(path, title=data["book_name"])
+        if await context.get_state() == ManageBooks.main_menu:
+            await books_menu(context=context)
+
     try:
-        await download_file(_filename, file.payload.url)
+        path = await download_file(_filename, file.payload.url)
+        asyncio.create_task(_parse_book(path))
         await books_menu(context)
         return
 
@@ -161,20 +171,38 @@ async def delete_selected_book(event: MessageCreated, context: MemoryContext):
     except ValueError:
         return
 
-    filenames = sorted(os.listdir(cache_dir))
-    if index < 1 or index > len(filenames):
+    data = await context.get_data()
+    books: list[BookObject] = data["books"]
+
+    if index < 1 or index > len(books):
         return
 
-    path = cache_dir / filenames[index - 1]
-    if delete_book(str(path)):
+    path = books[index - 1][1]
+
+    if BooksRepository().delete_book(path):
         await books_menu(context, chat_id=event.chat.chat_id)
+        return
+
+    await get_bot().edit_message(
+        message_id=message.message.body.mid,
+        text="Не удалось удалить книгу",
+        attachments=[cancel_keyboard()],
+    )
 
 
-@router.message_callback(F.callback.payload == "cancel", ManageBooks.select_book_name)
-@router.message_callback(F.callback.payload == "cancel", ManageBooks.upload_book)
-@router.message_callback(F.callback.payload == "cancel", ManageBooks.select_for_delete)
-async def cancel(event: MessageCallback, context: MemoryContext):
+async def cancel(event: MessageCallback, context: MemoryContext) -> None:
     await books_menu(context)
+
+
+router.message_callback.register(
+    cancel, F.callback.payload == "cancel", ManageBooks.select_book_name
+)
+router.message_callback.register(
+    cancel, F.callback.payload == "cancel", ManageBooks.upload_book
+)
+router.message_callback.register(
+    cancel, F.callback.payload == "cancel", ManageBooks.select_for_delete
+)
 
 
 # ----------------
