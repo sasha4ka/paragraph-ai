@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import re
@@ -187,6 +188,53 @@ def _get_file_end(
     return page_count - 1
 
 
+def _extract_toc_text_from_path(pdf_path: Path) -> str:
+    reader = PdfReader(pdf_path)
+    if not reader.pages:
+        raise ValueError(f"PDF contains no pages: {pdf_path}")
+    return _extract_toc_text(reader)
+
+
+def _build_book_metadata(pdf_path: Path, toc: TableOfContents) -> BookMetadata:
+    reader = PdfReader(pdf_path)
+    if not reader.pages:
+        raise ValueError(f"PDF contains no pages: {pdf_path}")
+
+    ordered_paragraphs = sorted(
+        toc.paragraphs.items(), key=lambda item: item[1].book_page_start
+    )
+    page_offset = _find_page_offset(reader, ordered_paragraphs)
+
+    paragraphs: dict[str, BookParagraph] = {}
+    for index, (number, entry) in enumerate(ordered_paragraphs):
+        file_start = entry.book_page_start + page_offset
+        file_end = _get_file_end(
+            index, ordered_paragraphs, page_offset, len(reader.pages)
+        )
+
+        if file_start < 0 or file_start >= len(reader.pages) or file_end < file_start:
+            raise ValueError(
+                f"Invalid page range for paragraph {number}: "
+                f"title={entry.title!r}, book_page_start={entry.book_page_start}, "
+                f"file_start={file_start}, file_end={file_end}, "
+                f"page_offset={page_offset}, page_count={len(reader.pages)}"
+            )
+
+        paragraphs[number] = BookParagraph(
+            title=entry.title,
+            book_page_start=entry.book_page_start,
+            file_start=file_start,
+            file_end=min(file_end, len(reader.pages) - 1),
+        )
+
+    return BookMetadata(
+        title="",
+        pdf_path=pdf_path,
+        created_at=datetime.datetime.now(datetime.UTC).date(),
+        paragraphs=paragraphs,
+    )
+
+
 async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfContents:
     messages = [
         {
@@ -239,49 +287,10 @@ async def parse_book(
     path: str | Path, client: AsyncOpenAI | None = None
 ) -> BookMetadata:
     pdf_path = Path(path)
-    reader = PdfReader(pdf_path)
-    if not reader.pages:
-        raise ValueError(f"PDF contains no pages: {pdf_path}")
-
     toc = await _parse_table_of_contents(
-        _extract_toc_text(reader),
+        await asyncio.to_thread(_extract_toc_text_from_path, pdf_path),
         client if client is not None else get_async_openai_client(),
     )
     if not toc.paragraphs:
         raise ValueError("LLM returned an empty table of contents")
-
-    ordered_paragraphs = sorted(
-        toc.paragraphs.items(), key=lambda item: item[1].book_page_start
-    )
-
-    page_offset = _find_page_offset(reader, ordered_paragraphs)
-
-    paragraphs: dict[str, BookParagraph] = {}
-    for index, (number, entry) in enumerate(ordered_paragraphs):
-        file_start = entry.book_page_start + page_offset
-        file_end = _get_file_end(
-            index, ordered_paragraphs, page_offset, len(reader.pages)
-        )
-
-        if file_start < 0 or file_start >= len(reader.pages) or file_end < file_start:
-            raise ValueError(
-                f"Invalid page range for paragraph {number}: "
-                f"title={entry.title!r}, book_page_start={entry.book_page_start}, "
-                f"file_start={file_start}, file_end={file_end}, "
-                f"page_offset={page_offset}, page_count={len(reader.pages)}"
-            )
-
-        paragraphs[number] = BookParagraph(
-            title=entry.title,
-            book_page_start=entry.book_page_start,
-            file_start=file_start,
-            file_end=min(file_end, len(reader.pages) - 1),
-        )
-
-    metadata = BookMetadata(
-        title="",
-        pdf_path=pdf_path,
-        created_at=datetime.datetime.now(datetime.UTC).date(),
-        paragraphs=paragraphs,
-    )
-    return metadata
+    return await asyncio.to_thread(_build_book_metadata, pdf_path, toc)
