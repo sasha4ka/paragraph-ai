@@ -92,14 +92,15 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     paragraph_titles = {
         paragraph_id: paragraph.title for paragraph_id, paragraph in paragraphs.items()
     }
+    processing_message = await event.message.answer(text="Готовлю конспект ⏳")
     try:
         selected_ids = await resolve_paragraphs(body.text, paragraph_titles)
     except ParagraphSelectionError as exc:
+        await _delete_processing_message(processing_message)
         await event.message.answer(text=str(exc))
         return
 
     await context.set_state(Summarize.chat_mode)
-    processing_message = await event.message.answer(text="Готовлю конспект ⏳")
     book = BooksRepository().get_book(data["book_path"])
     paragraph_text = await book.get_text(selected_ids)
 
