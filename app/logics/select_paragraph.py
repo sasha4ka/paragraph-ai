@@ -57,7 +57,7 @@ async def select_paragraphs(
     llm = client or get_async_openai_client()
     try:
         response = await llm.chat.completions.parse(
-            model=settings.openai_model,
+            model=settings.default_model,
             messages=messages,
             response_format=ParagraphSelection,
         )

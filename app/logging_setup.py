@@ -24,3 +24,7 @@ def setup():
         handlers=[logging.StreamHandler()],
     )
     logging.getLogger().handlers[0].setFormatter(ColoredFormatter())
+    logging.getLogger("httpcore2").setLevel(logging.ERROR)
+    logging.getLogger("httpx2").setLevel(logging.ERROR)
+    logging.getLogger("dispatcher").setLevel(logging.INFO)
+    logging.getLogger("openai").setLevel(logging.ERROR)

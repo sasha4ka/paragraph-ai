@@ -60,7 +60,7 @@ class Communication:
     ) -> None:
         self.context = self._normalize_context(chat_context)
         self.api_key = api_key or settings.openai_api_token
-        self.model = model or settings.openai_model
+        self.model = model or settings.default_model
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.temperature = temperature
