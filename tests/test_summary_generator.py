@@ -21,6 +21,44 @@ def test_short_summary_is_returned_as_one_block():
     assert abstractor.summarize("Текст параграфа") == ["Короткий конспект."]
 
 
+def test_only_supported_html_tags_are_preserved():
+    generated_text = (
+        "<h1>Тема</h1> <em>важно</em> <strong>ключевое</strong> "
+        "<s>старое</s> <u>термин</u> <code>x = 1</code> "
+        "<pre>пример</pre> <blockquote>цитата</blockquote> <mark>важно</mark> "
+        "<a href='https://example.com'>ссылка</a> <script>опасно</script>"
+    )
+    abstractor = ParagraphAbstractor(
+        api_key="test",
+        client=FakeClient(generated_text),
+    )
+
+    assert abstractor.summarize("Текст параграфа") == [
+        "<h1>Тема</h1> <em>важно</em> <strong>ключевое</strong> "
+        "<s>старое</s> <u>термин</u> <code>x = 1</code> "
+        "<pre>пример</pre> <blockquote>цитата</blockquote> <mark>важно</mark> "
+        "ссылка опасно"
+    ]
+
+
+def test_llm_block_markers_preserve_microtopic_boundaries():
+    generated_text = (
+        "[[BLOCK]] Определение микротемы.\n"
+        "[[BLOCK]] Причина и следствие.\n"
+        "[[BLOCK]] Пример применения."
+    )
+    abstractor = ParagraphAbstractor(
+        api_key="test",
+        client=FakeClient(generated_text),
+    )
+
+    assert abstractor.summarize("Текст параграфа") == [
+        "Определение микротемы.",
+        "Причина и следствие.",
+        "Пример применения.",
+    ]
+
+
 def test_long_summary_is_split_into_blocks_up_to_4000_characters():
     generated_text = "Первая тема\n\n" + "Предложение. " * 700 + "\n\nВторая тема"
     abstractor = ParagraphAbstractor(

@@ -40,16 +40,30 @@ class ParagraphAbstractor:
     BASE_URL = "https://routerai.ru/api/v1"
     DEFAULT_MODEL = "openai/gpt-6-luna"
     MAX_BLOCK_LENGTH = 4_000
+    BLOCK_MARKER = "[[BLOCK]]"
+    ALLOWED_HTML_TAGS = frozenset(
+        {"em", "strong", "s", "u", "code", "pre", "h1", "blockquote", "mark"}
+    )
     SYSTEM_PROMPT = """Ты составляешь точные и понятные учебные конспекты.
 Работай только с информацией из переданного параграфа и ничего не выдумывай.
 
 Требования к конспекту:
 - сохрани главную мысль, ключевые факты, определения, формулы и причинно-следственные связи;
-- используй понятную структуру с короткими заголовками и перечислениями через тире;
+- группируй связанные микротемы в один блок, не превращай каждую микротему в отдельное сообщение;
+- разделяй блоки только на естественных границах и сохраняй порядок исходного текста;
+- каждый блок должен быть понятен без соседних блоков и содержать не более 4000 символов;
+- между блоками на отдельной строке ставь маркер [[BLOCK]]; не ставь маркер перед первым блоком;
+- не разрывай определение, формулу, список или причинно-следственную связь между блоками;
+- активно используй HTML-разметку там, где она улучшает чтение: оформляй название каждой крупной части через <h1>, ключевые определения и важные выводы через <strong>, термины и особенно важные фрагменты через <mark>, смысловые акценты через <em>;
+- формулы, обозначения, значения переменных и короткие фрагменты кода оформляй через <code>, а многострочные фрагменты — через <pre>;
+- дословные цитаты из параграфа оформляй через <blockquote>; <s> и <u> используй только если это прямо следует из смысла исходного текста;
+- не оставляй весь конспект обычным текстом, если к нему уместно применить разрешённое форматирование, но не оборачивай в тег целые абзацы без необходимости;
+- используй понятную структуру с короткими заголовками и перечислениями через тире внутри блоков;
 - формулы, обозначения, имена, даты и числовые значения передавай без искажений;
 - убирай повторы, иллюстративные детали и задания в конце параграфа;
 - не добавляй вступление, заключительные фразы и сведения, которых нет в тексте;
-- возвращай только обычный текст без Markdown, LaTeX и HTML;
+- используй только следующие HTML-теги без атрибутов: <em> для курсива, <strong> для жирного, <s> для зачёркивания, <u> для подчёркивания, <code> и <pre> для моноширинного текста, <h1> для заголовков, <blockquote> для цитат и <mark> для выделения в тексте;
+- не используй никакие другие HTML-теги, Markdown или LaTeX; маркер [[BLOCK]] является единственным разрешённым служебным обозначением;
 - не используй символы форматирования #, *, _, $, обратные кавычки и команды LaTeX вроде text{...};
 - записывай химические формулы обычным текстом, например CH4, C2H6, CxHy;
 """
@@ -122,7 +136,21 @@ class ParagraphAbstractor:
         result = result.replace("**", "").replace("__", "")
         result = result.translate(str.maketrans("", "", "*$`#_"))
         result = result.replace("\\", "")
+        result = ParagraphAbstractor._clean_html(result)
         return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+    @classmethod
+    def _clean_html(cls, text: str) -> str:
+        """Keep only the supported HTML tags and remove all their attributes."""
+        tag_pattern = re.compile(r"<\s*(/?)\s*([a-zA-Z][\w-]*)(?:\s[^>]*)?>")
+
+        def replace_tag(match: re.Match[str]) -> str:
+            tag_name = match.group(2).lower()
+            if tag_name in cls.ALLOWED_HTML_TAGS:
+                return f"<{match.group(1)}{tag_name}>"
+            return ""
+
+        return tag_pattern.sub(replace_tag, text)
 
     @classmethod
     def _parse_response(cls, response: Any) -> str:
@@ -151,27 +179,31 @@ class ParagraphAbstractor:
 
     @classmethod
     def _split_into_blocks(cls, text: str) -> list[str]:
-        """Split an outline into MAX-compatible messages without losing text."""
-        remaining = text.strip()
+        """Use LLM-selected microtopic boundaries and enforce the message limit."""
+        requested_blocks = [
+            block.strip() for block in text.split(cls.BLOCK_MARKER) if block.strip()
+        ]
+        remaining_blocks = requested_blocks or [text.strip()]
         blocks: list[str] = []
 
-        while len(remaining) > cls.MAX_BLOCK_LENGTH:
-            window = remaining[: cls.MAX_BLOCK_LENGTH + 1]
-            cut = cls.MAX_BLOCK_LENGTH
+        for remaining in remaining_blocks:
+            while len(remaining) > cls.MAX_BLOCK_LENGTH:
+                window = remaining[: cls.MAX_BLOCK_LENGTH + 1]
+                cut = cls.MAX_BLOCK_LENGTH
 
-            for separator in ("\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " "):
-                position = window.rfind(separator)
-                if position >= cls.MAX_BLOCK_LENGTH // 2:
-                    cut = position + len(separator)
-                    break
+                for separator in ("\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " "):
+                    position = window.rfind(separator)
+                    if position >= cls.MAX_BLOCK_LENGTH // 2:
+                        cut = position + len(separator)
+                        break
 
-            block = remaining[:cut].strip()
-            if block:
-                blocks.append(block)
-            remaining = remaining[cut:].strip()
+                block = remaining[:cut].strip()
+                if block:
+                    blocks.append(block)
+                remaining = remaining[cut:].strip()
 
-        if remaining:
-            blocks.append(remaining)
+            if remaining:
+                blocks.append(remaining)
         return blocks
 
     def summarize(self, paragraph_text: str) -> list[str]:
