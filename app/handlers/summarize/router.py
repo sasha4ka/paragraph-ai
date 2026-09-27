@@ -17,7 +17,9 @@ from app.logics.select_paragraph import (
 from app.logics.select_paragraph import (
     select_paragraphs as resolve_paragraphs,
 )
-from app.logics.summary_generator import AbstractGenerationError, ParagraphAbstractor
+from app.logics.summary.models import SourceParagraph, SynthesisResult
+from app.logics.summary.progress import SummaryProgress
+from app.logics.summary.summary_generator import generate_summary_with_events
 from app.states import Summarize
 
 router = Router()
@@ -103,11 +105,36 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
 
     await context.set_state(Summarize.chat_mode)
     book = BooksRepository().get_book(data["book_path"])
-    paragraph_text = await book.get_text(selected_ids)
 
     try:
-        summary_blocks = await ParagraphAbstractor().summarize_async(paragraph_text)
-    except AbstractGenerationError:
+        await _edit_processing_message(processing_message, "Читаю выбранные параграфы…")
+        source_paragraphs = await asyncio.gather(
+            *(book.get_text([paragraph_id]) for paragraph_id in selected_ids)
+        )
+        source_items = [
+            SourceParagraph(
+                title=paragraphs[paragraph_id].title,
+                text=paragraph_text,
+                paragraph_id=_event_paragraph_id(paragraph_id, index),
+            )
+            for index, (paragraph_id, paragraph_text) in enumerate(
+                zip(selected_ids, source_paragraphs, strict=True)
+            )
+        ]
+        progress = SummaryProgress(source_items)
+        summary: SynthesisResult | None = None
+        last_progress_status = ""
+        async for summary_event in generate_summary_with_events(source_items):
+            progress.handle_event(summary_event)
+            progress_status = progress.get_status()
+            if progress_status != last_progress_status:
+                await _edit_processing_message(processing_message, progress_status)
+                last_progress_status = progress_status
+            if summary_event.result is not None:
+                summary = summary_event.result
+        if summary is None:
+            raise RuntimeError("Summary generator did not return a final result")
+    except Exception:
         await _delete_processing_message(processing_message)
         await context.set_state(Summarize.select_paragraphs)
         await event.message.answer(text="Не удалось подготовить конспект.")
@@ -115,28 +142,68 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         logger.exception(f"Error generating summary {user_id=}")
         return
 
-    if len(summary_blocks) > 20:
-        await event.message.answer(text="Не удалось подготовить конспект.")
-        user_id = event.message.sender.user_id
-        logger.error(
-            f"Too big summary ({len(summary_blocks)} blocks). can not send to max api {user_id=}"
+    summary_blocks = [
+        (title, block)
+        for title, block in (
+            ("Конспект", summary.summary_block),
+            ("Важные сведения", summary.information_block),
         )
-        return
+        if block.strip()
+    ]
 
     await _delete_processing_message(processing_message)
-    for block in summary_blocks:
-        block = _truncate_summary(block)
-        await event.message.answer(text=block, parse_mode=ParseMode.HTML)
+    for title, block in summary_blocks:
+        message = f"{title}\n\n{block}"
+        for chunk in _split_message(message):
+            await event.message.answer(text=chunk, format=ParseMode.MARKDOWN)
         await asyncio.sleep(0.5)
 
 
-def _truncate_summary(summary: str) -> str:
-    if len(summary) <= 3900:
-        return summary
-    return summary[:3900] + "..."
+def _split_message(text: str, limit: int = 3900) -> list[str]:
+    """Split generated text under MAX's message limit without dropping content."""
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > limit:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+            chunks.append(line[:limit].rstrip())
+            line = line[limit:]
+
+        if current and len(current) + len(line) > limit:
+            chunks.append(current.rstrip())
+            current = ""
+        current += line
+
+    if current:
+        chunks.append(current.rstrip())
+    return chunks
 
 
 async def _delete_processing_message(message: SendedMessage | None) -> None:
     if message is None or message.message is None or message.message.body is None:
         return
     await get_bot().delete_message(message.message.body.mid)
+
+
+async def _edit_processing_message(message: SendedMessage | None, text: str) -> None:
+    if message is None or message.message is None or message.message.body is None:
+        return
+    try:
+        await get_bot().edit_message(
+            message_id=message.message.body.mid,
+            text=text,
+        )
+    except Exception:
+        logger.warning("Failed to update summary progress message", exc_info=True)
+
+
+def _event_paragraph_id(paragraph_id: str, index: int) -> int:
+    try:
+        return int(paragraph_id)
+    except ValueError:
+        return index + 1
