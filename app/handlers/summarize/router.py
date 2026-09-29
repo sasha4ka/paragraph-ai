@@ -10,6 +10,7 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from app.books import BooksRepository
 from app.bot import get_bot
+from app.exc import GenerationError
 from app.handlers.manage_books.utils import compile_books_list
 from app.logics.select_paragraph import (
     ParagraphSelectionError,
@@ -17,13 +18,13 @@ from app.logics.select_paragraph import (
 from app.logics.select_paragraph import (
     select_paragraphs as resolve_paragraphs,
 )
-from app.logics.summary.models import SourceParagraph
+from app.logics.summary.models import BakedBlock, SourceParagraph
 from app.logics.summary.summary_generator import generate_summary
 from app.states import Summarize
 
 router = Router()
 
-logger = logging.getLogger("summarize router")
+logger = logging.getLogger("summarizer")
 
 
 def exit_keyboard():
@@ -83,6 +84,9 @@ async def select_book(event: MessageCreated, context: MemoryContext):
 
 @router.message_created(F.message.body.text, Summarize.select_paragraphs)
 async def select_paragraphs(event: MessageCreated, context: MemoryContext):
+    mid = event.message.body.mid
+    uid = event.from_user.user_id
+
     data = await context.get_data()
     paragraphs = dict(data.get("paragraphs", []))
     body = event.message.body
@@ -93,10 +97,14 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     }
     processing_message = await event.message.answer(text="Готовлю конспект ⏳")
     try:
+        logger.info(f"resolving paragraphs {mid=} {uid=}")
         selected_ids = await resolve_paragraphs(body.text, paragraph_titles)
-    except ParagraphSelectionError as exc:
+    except ParagraphSelectionError:
+        logger.exception("error resolving paragraph")
         await _delete_processing_message(processing_message)
-        await event.message.answer(text=str(exc))
+        await event.message.answer(
+            text="Ошибка выбора параграфа. Попробуйте снова позже"
+        )
         return
 
     await context.set_state(Summarize.chat_mode)
@@ -116,7 +124,36 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
             text=paragraph_text,
             paragraph_id=_event_paragraph_id(paragraph_id, 0),
         )
-        blocks = await generate_summary(source_item)
+        logger.info(
+            f"summarizing {book.metadata.title} {source_item.title} {mid=} {uid=}"
+        )
+        result: list[BakedBlock] | None = None
+        async for generation_event in generate_summary(source_item):
+            match generation_event.status:
+                case "cleaning":
+                    logger.info(f"cleaning text {mid=} {uid=}")
+                    await processing_message.message.edit(
+                        text="Очистка текста сообщения... ✨"
+                    )
+                case "planing":
+                    logger.info(f"making plan {mid=} {uid=}")
+                    await processing_message.message.edit(
+                        text="Подготовка плана доклада... ✨"
+                    )
+                case "extracting":
+                    logger.info(f"extracting facts {mid=} {uid=}")
+                    await processing_message.message.edit(
+                        text="Выделение информации... ✨"
+                    )
+                case "baking":
+                    logger.info(f"baking text blocks {mid=} {uid=}")
+                    await processing_message.message.edit(text="Добавляем магии... ✨")
+                case "done":
+                    result = generation_event.result
+
+        if result is None:
+            raise GenerationError("Summary didn't generated")
+
     except Exception:
         await _delete_processing_message(processing_message)
         await context.set_state(Summarize.select_paragraphs)
@@ -126,7 +163,7 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         return
 
     await _delete_processing_message(processing_message)
-    for block in blocks:
+    for block in result:
         for chunk in _split_message(block.text):
             await event.message.answer(text=chunk, format=ParseMode.HTML)
         await asyncio.sleep(0.5)

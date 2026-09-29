@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -12,6 +13,8 @@ from app.openai import (
     get_async_openai_client,
 )
 from app.settings import settings
+
+logger = logging.getLogger("paragraph_resolver")
 
 
 class ParagraphSelection(BaseModel):
@@ -68,9 +71,8 @@ async def select_paragraphs(
         TypeError,
         ValueError,
     ) as exc:
-        raise ParagraphSelectionError(
-            "Не удалось распознать выбранные параграфы."
-        ) from exc
+        logger.exception("failed to resolve")
+        raise ParagraphSelectionError() from exc
 
     if not response.choices:
         raise ParagraphSelectionError("Модель не вернула выбранные параграфы.")
