@@ -17,9 +17,8 @@ from app.logics.select_paragraph import (
 from app.logics.select_paragraph import (
     select_paragraphs as resolve_paragraphs,
 )
-from app.logics.summary.models import SourceParagraph, SynthesisResult
-from app.logics.summary.progress import SummaryProgress
-from app.logics.summary.summary_generator import generate_summary_with_events
+from app.logics.summary.models import SourceParagraph
+from app.logics.summary.summary_generator import generate_summary
 from app.states import Summarize
 
 router = Router()
@@ -77,10 +76,7 @@ async def select_book(event: MessageCreated, context: MemoryContext):
     await context.set_state(Summarize.select_paragraphs)
 
     await event.message.answer(
-        text=(
-            "Введите название одного или нескольких параграфов. "
-            "Если выбираете несколько, разделите названия запятыми."
-        ),
+        text="Введите название одного параграфа.",
         attachments=[cancel_keyboard()],
     )
 
@@ -106,34 +102,21 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     await context.set_state(Summarize.chat_mode)
     book = BooksRepository().get_book(data["book_path"])
 
+    if len(selected_ids) != 1:
+        await _delete_processing_message(processing_message)
+        await context.set_state(Summarize.select_paragraphs)
+        await event.message.answer(text="Выберите только один параграф для конспекта.")
+        return
+
     try:
-        await _edit_processing_message(processing_message, "Читаю выбранные параграфы…")
-        source_paragraphs = await asyncio.gather(
-            *(book.get_text([paragraph_id]) for paragraph_id in selected_ids)
+        paragraph_id = selected_ids[0]
+        paragraph_text = await book.get_text([paragraph_id])
+        source_item = SourceParagraph(
+            title=paragraphs[paragraph_id].title,
+            text=paragraph_text,
+            paragraph_id=_event_paragraph_id(paragraph_id, 0),
         )
-        source_items = [
-            SourceParagraph(
-                title=paragraphs[paragraph_id].title,
-                text=paragraph_text,
-                paragraph_id=_event_paragraph_id(paragraph_id, index),
-            )
-            for index, (paragraph_id, paragraph_text) in enumerate(
-                zip(selected_ids, source_paragraphs, strict=True)
-            )
-        ]
-        progress = SummaryProgress(source_items)
-        summary: SynthesisResult | None = None
-        last_progress_status = ""
-        async for summary_event in generate_summary_with_events(source_items):
-            progress.handle_event(summary_event)
-            progress_status = progress.get_status()
-            if progress_status != last_progress_status:
-                await _edit_processing_message(processing_message, progress_status)
-                last_progress_status = progress_status
-            if summary_event.result is not None:
-                summary = summary_event.result
-        if summary is None:
-            raise RuntimeError("Summary generator did not return a final result")
+        blocks = await generate_summary(source_item)
     except Exception:
         await _delete_processing_message(processing_message)
         await context.set_state(Summarize.select_paragraphs)
@@ -142,20 +125,10 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         logger.exception(f"Error generating summary {user_id=}")
         return
 
-    summary_blocks = [
-        (title, block)
-        for title, block in (
-            ("Конспект", summary.summary_block),
-            ("Важные сведения", summary.information_block),
-        )
-        if block.strip()
-    ]
-
     await _delete_processing_message(processing_message)
-    for title, block in summary_blocks:
-        message = f"{title}\n\n{block}"
-        for chunk in _split_message(message):
-            await event.message.answer(text=chunk, format=ParseMode.MARKDOWN)
+    for block in blocks:
+        for chunk in _split_message(block.text):
+            await event.message.answer(text=chunk, format=ParseMode.HTML)
         await asyncio.sleep(0.5)
 
 
@@ -188,18 +161,6 @@ async def _delete_processing_message(message: SendedMessage | None) -> None:
     if message is None or message.message is None or message.message.body is None:
         return
     await get_bot().delete_message(message.message.body.mid)
-
-
-async def _edit_processing_message(message: SendedMessage | None, text: str) -> None:
-    if message is None or message.message is None or message.message.body is None:
-        return
-    try:
-        await get_bot().edit_message(
-            message_id=message.message.body.mid,
-            text=text,
-        )
-    except Exception:
-        logger.warning("Failed to update summary progress message", exc_info=True)
 
 
 def _event_paragraph_id(paragraph_id: str, index: int) -> int:
