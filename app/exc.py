@@ -4,3 +4,7 @@ class DownloadError(Exception):
 
 class InvalidPath(Exception):
     pass
+
+
+class GenerationError(Exception):
+    pass
