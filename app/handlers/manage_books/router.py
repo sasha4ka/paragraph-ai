@@ -230,9 +230,14 @@ async def delete_selected_book(event: MessageCreated, context: MemoryContext):
 
     path = books[index - 1][1]
 
+    uid = event.from_user.user_id
+
     if BooksRepository().delete_book(path):
+        logger.info(f"deleted book {path} {uid=}")
         await books_menu(context, chat_id=event.chat.chat_id)
         return
+
+    logger.warning(f"failed to delete book {path} {uid=}")
 
     await get_bot().edit_message(
         message_id=message.message.body.mid,
