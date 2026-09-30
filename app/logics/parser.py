@@ -1,17 +1,21 @@
 import asyncio
 import datetime
 import json
+import logging
 import re
 from collections import Counter
 from pathlib import Path
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from pypdf import PdfReader
 
+from app.exc import InvalidTOC
 from app.models import BookMetadata, BookParagraph
 from app.openai import get_async_openai_client
 from app.settings import settings
+
+logger = logging.getLogger("book-parser")
 
 
 class TableOfContentsEntry(BaseModel):
@@ -270,27 +274,39 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
         messages=messages,
     )
     if not response.choices:
-        raise ValueError("LLM returned no choices while extracting table of contents")
+        raise InvalidTOC("LLM returned no choices while extracting table of contents")
 
     content = response.choices[0].message.content
     if not content:
-        raise ValueError("LLM returned an empty table of contents")
+        raise InvalidTOC("LLM returned an empty table of contents")
 
     payload = json.loads(content)
     if not isinstance(payload, dict):
-        raise TypeError("LLM returned an invalid table of contents format")
+        raise InvalidTOC("LLM returned an invalid table of contents format")
 
-    return TableOfContents.model_validate(_normalize_toc_payload(payload))
+    try:
+        return TableOfContents.model_validate(_normalize_toc_payload(payload))
+    except ValidationError as exc:
+        raise InvalidTOC from exc
 
 
 async def parse_book(
-    path: str | Path, client: AsyncOpenAI | None = None
+    path: str | Path, client: AsyncOpenAI | None = None, attemps: int = 3
 ) -> BookMetadata:
     pdf_path = Path(path)
-    toc = await _parse_table_of_contents(
-        await asyncio.to_thread(_extract_toc_text_from_path, pdf_path),
-        client if client is not None else get_async_openai_client(),
-    )
-    if not toc.paragraphs:
-        raise ValueError("LLM returned an empty table of contents")
-    return await asyncio.to_thread(_build_book_metadata, pdf_path, toc)
+    toc_text = await asyncio.to_thread(_extract_toc_text_from_path, pdf_path)
+    client = client if client is not None else get_async_openai_client()
+
+    for i in range(attemps):
+        try:
+            toc = await _parse_table_of_contents(toc_text, client)
+
+            if not toc.paragraphs:
+                raise InvalidTOC()
+
+            return await asyncio.to_thread(_build_book_metadata, pdf_path, toc)
+        except InvalidTOC:
+            logger.warning(f"failed to parse TOC attempt {i}: {path}")
+
+    logger.error(f"failed to parse TOC after {attemps} attemps: {path}")
+    raise InvalidTOC(f"Failed to parse TOC: {path}")

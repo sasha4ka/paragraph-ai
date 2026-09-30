@@ -8,3 +8,7 @@ class InvalidPath(Exception):
 
 class GenerationError(Exception):
     pass
+
+
+class InvalidTOC(Exception):
+    pass
