@@ -6,6 +6,7 @@ from typing import Literal, Self, cast
 
 from pypdf import PdfReader
 
+from app.exc import InvalidTOC
 from app.logics.parser import parse_book
 from app.models import BookMetadata
 
@@ -104,7 +105,18 @@ class BooksRepository:
         book_path = Path(path)
         metadata_path = self.metadata_dir / f"{book_path.stem}.json"
         self._books[metadata_path] = (title, metadata_path, "processing")
-        metadata = await parse_book(book_path)
+
+        try:
+            metadata = await parse_book(book_path)
+        except InvalidTOC:
+            self._books.pop(metadata_path)
+            try:
+                os.remove(metadata_path)
+            except FileNotFoundError:
+                pass
+            os.remove(book_path)
+            raise
+
         metadata.title = title
         return self.add_book(metadata)
 

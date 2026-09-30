@@ -1,0 +1,29 @@
+services:
+  app:
+    build:
+      context: .
+    env_file:
+      - .env
+    volumes:
+      - books_data:/app/books
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  books_data:
+  caddy_data:
+  caddy_config:

@@ -10,6 +10,7 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from app.books import BooksRepository
 from app.bot import get_bot
+from app.exc import GenerationError
 from app.handlers.manage_books.utils import compile_books_list
 from app.logics.select_paragraph import (
     ParagraphSelectionError,
@@ -17,12 +18,13 @@ from app.logics.select_paragraph import (
 from app.logics.select_paragraph import (
     select_paragraphs as resolve_paragraphs,
 )
-from app.logics.summary_generator import AbstractGenerationError, ParagraphAbstractor
+from app.logics.summary.models import BakedBlock, SourceParagraph
+from app.logics.summary.summary_generator import generate_summary
 from app.states import Summarize
 
 router = Router()
 
-logger = logging.getLogger("summarize router")
+logger = logging.getLogger("summarizer")
 
 
 def exit_keyboard():
@@ -75,16 +77,16 @@ async def select_book(event: MessageCreated, context: MemoryContext):
     await context.set_state(Summarize.select_paragraphs)
 
     await event.message.answer(
-        text=(
-            "Введите название одного или нескольких параграфов. "
-            "Если выбираете несколько, разделите названия запятыми."
-        ),
+        text="Введите название одного параграфа.",
         attachments=[cancel_keyboard()],
     )
 
 
 @router.message_created(F.message.body.text, Summarize.select_paragraphs)
 async def select_paragraphs(event: MessageCreated, context: MemoryContext):
+    mid = event.message.body.mid
+    uid = event.from_user.user_id
+
     data = await context.get_data()
     paragraphs = dict(data.get("paragraphs", []))
     body = event.message.body
@@ -95,19 +97,64 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
     }
     processing_message = await event.message.answer(text="Готовлю конспект ⏳")
     try:
+        logger.info(f"resolving paragraphs {mid=} {uid=}")
         selected_ids = await resolve_paragraphs(body.text, paragraph_titles)
-    except ParagraphSelectionError as exc:
+    except ParagraphSelectionError:
+        logger.exception("error resolving paragraph")
         await _delete_processing_message(processing_message)
-        await event.message.answer(text=str(exc))
+        await event.message.answer(
+            text="Ошибка выбора параграфа. Попробуйте снова позже"
+        )
         return
 
     await context.set_state(Summarize.chat_mode)
     book = BooksRepository().get_book(data["book_path"])
-    paragraph_text = await book.get_text(selected_ids)
+
+    if len(selected_ids) != 1:
+        await _delete_processing_message(processing_message)
+        await context.set_state(Summarize.select_paragraphs)
+        await event.message.answer(text="Выберите только один параграф для конспекта.")
+        return
 
     try:
-        summary_blocks = await ParagraphAbstractor().summarize_async(paragraph_text)
-    except AbstractGenerationError:
+        paragraph_id = selected_ids[0]
+        paragraph_text = await book.get_text([paragraph_id])
+        source_item = SourceParagraph(
+            title=paragraphs[paragraph_id].title,
+            text=paragraph_text,
+            paragraph_id=_event_paragraph_id(paragraph_id, 0),
+        )
+        logger.info(
+            f"summarizing {book.metadata.title} {source_item.title} {mid=} {uid=}"
+        )
+        result: list[BakedBlock] | None = None
+        async for generation_event in generate_summary(source_item):
+            match generation_event.status:
+                case "cleaning":
+                    logger.info(f"cleaning text {mid=} {uid=}")
+                    await processing_message.message.edit(
+                        text="Очистка текста сообщения... ✨"
+                    )
+                case "planing":
+                    logger.info(f"making plan {mid=} {uid=}")
+                    await processing_message.message.edit(
+                        text="Подготовка плана доклада... ✨"
+                    )
+                case "extracting":
+                    logger.info(f"extracting facts {mid=} {uid=}")
+                    await processing_message.message.edit(
+                        text="Выделение информации... ✨"
+                    )
+                case "baking":
+                    logger.info(f"baking text blocks {mid=} {uid=}")
+                    await processing_message.message.edit(text="Добавляем магии... ✨")
+                case "done":
+                    result = generation_event.result
+
+        if result is None:
+            raise GenerationError("Summary didn't generated")
+
+    except Exception:
         await _delete_processing_message(processing_message)
         await context.set_state(Summarize.select_paragraphs)
         await event.message.answer(text="Не удалось подготовить конспект.")
@@ -115,28 +162,46 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         logger.exception(f"Error generating summary {user_id=}")
         return
 
-    if len(summary_blocks) > 20:
-        await event.message.answer(text="Не удалось подготовить конспект.")
-        user_id = event.message.sender.user_id
-        logger.error(
-            f"Too big summary ({len(summary_blocks)} blocks). can not send to max api {user_id=}"
-        )
-        return
-
     await _delete_processing_message(processing_message)
-    for block in summary_blocks:
-        block = _truncate_summary(block)
-        await event.message.answer(text=block, parse_mode=ParseMode.HTML)
+    for block in result:
+        for chunk in _split_message(block.text):
+            await event.message.answer(text=chunk, format=ParseMode.HTML)
         await asyncio.sleep(0.5)
 
 
-def _truncate_summary(summary: str) -> str:
-    if len(summary) <= 3900:
-        return summary
-    return summary[:3900] + "..."
+def _split_message(text: str, limit: int = 3900) -> list[str]:
+    """Split generated text under MAX's message limit without dropping content."""
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > limit:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+            chunks.append(line[:limit].rstrip())
+            line = line[limit:]
+
+        if current and len(current) + len(line) > limit:
+            chunks.append(current.rstrip())
+            current = ""
+        current += line
+
+    if current:
+        chunks.append(current.rstrip())
+    return chunks
 
 
 async def _delete_processing_message(message: SendedMessage | None) -> None:
     if message is None or message.message is None or message.message.body is None:
         return
     await get_bot().delete_message(message.message.body.mid)
+
+
+def _event_paragraph_id(paragraph_id: str, index: int) -> int:
+    try:
+        return int(paragraph_id)
+    except ValueError:
+        return index + 1
