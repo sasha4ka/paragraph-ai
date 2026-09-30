@@ -1,7 +1,6 @@
-import asyncio
 import logging
-from pathlib import Path
 from typing import Any, TypedDict
+from uuid import uuid1
 
 from maxapi import F, Router
 from maxapi.context import MemoryContext
@@ -10,17 +9,22 @@ from maxapi.types.attachments import File
 
 from app.books import BookObject, BooksRepository
 from app.bot import get_bot
-from app.exc import DownloadError, InvalidPath
-from app.handlers.manage_books.keyboards import cancel_keyboard, menu_keyboard
+from app.exc import DownloadError, InvalidPath, InvalidTOC
+from app.handlers.manage_books.keyboards import (
+    cancel_keyboard,
+    menu_keyboard,
+    to_books_list_keyboard,
+)
 from app.handlers.manage_books.utils import (
     compile_books_list,
     download_file,
 )
+from app.settings import settings
 from app.states import ManageBooks
 
 router = Router()
 logger = logging.getLogger("manage_books")
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 
 class ManageBooksData(TypedDict):
@@ -103,7 +107,7 @@ async def upload_book(event: MessageCallback, context: MemoryContext):
 
     message = await event.message.answer(
         text="""\
-Загрузите файл учебника
+Загрузите файл учебника (до 20 MiB)
 Доступные форматы: pdf
 """,
         attachments=[cancel_keyboard()],
@@ -119,12 +123,30 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
         return
     file = event.message.body.attachments[0]
 
+    if file.size > settings.max_file_size_mb * 1e6:
+        await get_bot().send_message(
+            chat_id=event.chat.chat_id,
+            text="Файл слишком большой!",
+            attachments=[cancel_keyboard()],
+        )
+        uid = event.from_user.user_id
+        chat_id = event.chat.chat_id
+        logger.warning(f"to big file {file.size / 1e6:.1f} MiB {uid=} {chat_id=}")
+        return
+
     message = await get_bot().send_message(
         chat_id=event.chat.chat_id,
         text="""\
 Загрузка файла ⏳...""",
+        attachments=[to_books_list_keyboard()],
     )
-    await context.update_data(menu_message_id=message.message.body.mid)
+
+    ticket_id = str(uuid1())
+
+    await context.set_state(ManageBooks.processing_book)
+    await context.update_data(
+        menu_message_id=message.message.body.mid, ticket_id=ticket_id
+    )
 
     data = await context.get_data()
 
@@ -132,15 +154,36 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
     _extension = _original_filename[-1]
     _filename = f"{data['book_name']}.{_extension}"
 
-    async def _parse_book(path: Path):
-        await BooksRepository().parse_then_add_book(path, title=data["book_name"])
-        await books_menu(context)
-        if await context.get_state() == ManageBooks.main_menu:
-            await books_menu(context=context)
+    uid = event.from_user.user_id
 
     try:
+        logger.info(f"downloading file: {_filename} {uid=} {ticket_id=:.10}")
         path = await download_file(_filename, file.payload.url)
-        asyncio.create_task(_parse_book(path))
+
+        data = await context.get_data()
+        state = await context.get_state()
+        if (
+            state == ManageBooks.processing_book
+            and data.get("ticket_id", "") == ticket_id
+        ):
+            await get_bot().edit_message(
+                message_id=data["menu_message_id"],
+                text="Обработка книги ⏳...",
+                attachments=[to_books_list_keyboard()],
+            )
+
+        logger.info(f"parsing book: {path} {uid=} {ticket_id=:.8}")
+        await BooksRepository().parse_then_add_book(path, title=data["book_name"])
+
+        data = await context.get_data()
+        state = await context.get_state()
+        if (
+            state == ManageBooks.processing_book
+            and data.get("ticket_id", "") == ticket_id
+            or state == ManageBooks.main_menu
+        ):
+            await books_menu(context)
+
         return
 
     except InvalidPath:
@@ -148,12 +191,20 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
         logger.warning(f"User attempted to exploit file saving! {user_id=}")
     except DownloadError:
         logger.warning("Failed to download file", exc_info=True)
+    except InvalidTOC:
+        pass
 
-    await get_bot().edit_message(
-        message_id=message.message.body.mid,
-        text="Не удалось загрузить файл",
-        attachments=[cancel_keyboard()],
-    )
+    data = await context.get_data()
+    state = await context.get_state()
+
+    if state == ManageBooks.processing_book and data.get("ticket_id", "") == ticket_id:
+        await get_bot().edit_message(
+            message_id=message.message.body.mid,
+            text="Не удалось обработать книгу. Попробуйте позже!",
+            attachments=[cancel_keyboard()],
+        )
+    elif state == ManageBooks.main_menu:
+        await books_menu(context)
 
 
 @router.message_created(F.message.body.text, ManageBooks.select_for_delete)
@@ -202,6 +253,9 @@ router.message_callback.register(
 )
 router.message_callback.register(
     cancel, F.callback.payload == "cancel", ManageBooks.select_for_delete
+)
+router.message_callback.register(
+    cancel, F.callback.payload == "processing:to_menu", ManageBooks.processing_book
 )
 
 

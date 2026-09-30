@@ -306,7 +306,7 @@ async def parse_book(
 
             return await asyncio.to_thread(_build_book_metadata, pdf_path, toc)
         except InvalidTOC:
-            logger.warning(f"failed to parse TOC attempt {i}: {path}")
+            logger.warning(f"failed to parse TOC attempt {i}: {path}", exc_info=True)
 
     logger.error(f"failed to parse TOC after {attemps} attemps: {path}")
     raise InvalidTOC(f"Failed to parse TOC: {path}")

@@ -14,7 +14,7 @@ logger = logging.getLogger("start_router")
 async def start_command(event: MessageCreated | BotStarted):
     uid = event.from_user.user_id
     chat_id = event.chat.chat_id
-    logger.info(f"bot started {uid=uid}")
+    logger.info(f"bot started {uid=}")
     await get_bot().send_message(
         chat_id=chat_id,
         text="""\
