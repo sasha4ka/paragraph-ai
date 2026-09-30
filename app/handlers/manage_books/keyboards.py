@@ -14,3 +14,9 @@ def cancel_keyboard():
     builder = InlineKeyboardBuilder()
     builder.add(CallbackButton(text="Отмена", payload="cancel"))
     return builder.as_markup()
+
+
+def to_books_list_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(CallbackButton(text="Вернуться в меню", payload="processing:to_menu"))
+    return builder.as_markup()
