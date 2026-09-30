@@ -1,0 +1,40 @@
+name: 'Build and push a container to GHCR'
+
+on:
+    push:
+        tags:
+            - 'v[0-9].[0-9]+.[0-9]'
+
+env:
+    GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+    CONTAINER_NAME: 'sasha4ka/paragraph-ai'
+    USER_NAME: 'sasha4ka'
+
+jobs:
+    build-and-push:
+        runs-on: ubuntu-latest
+        
+        steps:
+            - name: setup checkout
+              uses: actions/checkout@v4
+            
+            - name: Set up latest git tag
+              run: |
+                RAW_TAG="${GITHUB_REF#refs/tags/}"
+                VERSION="${RAW_TAG#*@}"
+                echo "VERSION=${VERSION}" >> $GITHUB_ENV
+                echo "Version: $VERSION"
+            
+            - name: Docker build
+              run: |
+                docker build -t ghcr.io/${{ env.CONTAINER_NAME }}:latest .
+                docker build -t ghcr.io/${{ env.CONTAINER_NAME }}:${{ env.VERSION }} .
+            
+            - name: GitHub (GHCR) login
+              run: echo $GHCR_TOKEN | docker login ghcr.io -u $USER_NAME --password-stdin
+            
+            - name: GitHub (GHCR) push
+              run: |
+                docker push ghcr.io/${{ env.CONTAINER_NAME }}:latest
+                docker push ghcr.io/${{ env.CONTAINER_NAME }}:${{ env.VERSION }}
+
