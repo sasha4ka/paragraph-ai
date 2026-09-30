@@ -12,10 +12,7 @@ dependencies = [
     "fonttools>=4.66.0",
     "langchain[openai]>=1.4.2",
     "maxapi>=1.2.2",
-<<<<<<< HEAD
-=======
     "openai>=3.19.2",
->>>>>>> dev
     "pydantic-settings>=2.15.0",
     "pypdf>=6.0.0",
     "sqlalchemy>=2.0.54",
