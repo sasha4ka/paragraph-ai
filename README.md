@@ -106,15 +106,13 @@ uv sync
 
 ```env
 # Бот MAX
-BOT_TOKEN=your_maxapi_token_here
-
-# База данных PostgreSQL
-DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/paragraph_ai
+API_TOKEN=your_maxapi_token_here
 
 # RouterAI через OpenAI-совместимый API
 OPENAI_API_TOKEN=your_routerai_key_here
 OPENAI_BASE_URL=https://routerai.ru/api/v1
-OPENAI_MODEL=openai/gpt-6-luna
+DEFAULT_MODEL=openai/gpt-6-luna
+PARSING_MODEL=deepseek/deepseek-v4.1-flash
 
 ```
 
@@ -126,3 +124,20 @@ OPENAI_MODEL=openai/gpt-6-luna
 uv run python main.py
 
 ```
+
+### Запуск через Docker Compose
+
+Создайте `.env` с настройками приложения и добавьте `DOMAIN=bot.example.com` для
+публичного домена. Укажите DNS-запись домена на сервер и откройте порты 80 и 443.
+Для локального запуска без домена Caddy использует `localhost`.
+
+```bash
+docker compose up --build -d
+docker compose logs -f app
+```
+
+Caddy автоматически обслуживает HTTPS и проксирует запросы на `app:8000`.
+Приложение пока работает через long polling и не поднимает HTTP-сервер, поэтому
+прокси станет рабочим для вебхуков после добавления HTTP/webhook-обработчика.
+Каталог `books/` исключён из образа; загружайте книги через бота — они хранятся
+в Docker volume `books_data` и переживают пересоздание контейнера.

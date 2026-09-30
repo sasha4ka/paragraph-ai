@@ -1,0 +1,4 @@
+{$DOMAIN} {
+	# The app is currently polling-only. This upstream is for its future HTTP/webhook handler.
+	reverse_proxy app:8000
+}
