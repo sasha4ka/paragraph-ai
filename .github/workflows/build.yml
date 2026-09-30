@@ -1,5 +1,9 @@
 name: 'Build and push a container to GHCR'
 
+permissions:
+  contents: read
+  packages: write
+
 on:
     push:
         tags:
@@ -30,8 +34,12 @@ jobs:
                 docker build -t ghcr.io/${{ env.CONTAINER_NAME }}:latest .
                 docker build -t ghcr.io/${{ env.CONTAINER_NAME }}:${{ env.VERSION }} .
             
-            - name: GitHub (GHCR) login
-              run: echo $GHCR_TOKEN | docker login ghcr.io -u $USER_NAME --password-stdin
+            - name: Login to GHCR
+              uses: docker/login-action@v3
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
             
             - name: GitHub (GHCR) push
               run: |
