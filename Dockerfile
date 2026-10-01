@@ -14,11 +14,12 @@ WORKDIR /app
 
 # Install locked dependencies before copying frequently changed application code.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project
 
 COPY README.md main.py ./
 COPY app/ ./app/
-RUN uv sync --frozen --no-dev \
+RUN uv sync --locked --no-dev \
+    && /app/.venv/bin/python -c "import pypdf" \
     && useradd --system --uid 10001 --create-home app \
     && mkdir -p /app/books/metadata \
     && chown -R app:app /app/books
