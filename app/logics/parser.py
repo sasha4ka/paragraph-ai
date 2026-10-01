@@ -6,13 +6,12 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pypdf import PdfReader
 
 from app.exc import InvalidTOC
 from app.models import BookMetadata, BookParagraph
-from app.openai import get_async_openai_client
+from app.openai import APIError, AsyncOpenAI, get_async_openai_client
 from app.settings import settings
 
 logger = logging.getLogger("book-parser")
@@ -84,12 +83,69 @@ def _extract_toc_text(reader: PdfReader) -> str:
         set(range(min(10, page_count)))
         | set(range(max(0, page_count - 10), page_count))
     )
-
     return "\n".join(
         f"--- PDF page {page_number + 1} ---\n"
         f"{reader.pages[page_number].extract_text() or ''}"
         for page_number in page_numbers
     )
+
+
+def _is_heading_line(value: str) -> bool:
+    """Return whether a line looks like an uppercase title continuation."""
+    letters = [character for character in value if character.isalpha()]
+    return bool(letters) and sum(character.isupper() for character in letters) / len(
+        letters
+    ) >= 0.8
+
+
+def _extract_local_toc(reader: PdfReader) -> TableOfContents | None:
+    """Extract numbered ``§`` headings directly from searchable PDF text."""
+    paragraphs: dict[str, TableOfContentsEntry] = {}
+    heading_pattern = re.compile(r"^\s*§\s*(\d+)\s*[.]?\s*(.*?)\s*$")
+
+    for file_page, page in enumerate(reader.pages):
+        lines = (page.extract_text() or "").splitlines()
+        printed_page = next(
+            (
+                int(line.strip())
+                for line in lines[:5]
+                if re.fullmatch(r"\s*\d+\s*", line)
+            ),
+            file_page + 1,
+        )
+
+        for line_index, line in enumerate(lines):
+            match = heading_pattern.fullmatch(line)
+            if match is None:
+                continue
+
+            number, first_title_line = match.groups()
+            if number in paragraphs or not first_title_line:
+                continue
+
+            title_lines = [first_title_line.strip()]
+            for continuation in lines[line_index + 1 : line_index + 4]:
+                continuation = continuation.strip()
+                if not continuation or not _is_heading_line(continuation):
+                    break
+                title_lines.append(continuation)
+
+            title = re.sub(r"\s+", " ", " ".join(title_lines)).strip()
+            paragraphs[number] = TableOfContentsEntry(
+                book_page_start=printed_page,
+                title=f"§ {number}. {title}",
+            )
+
+    if not paragraphs:
+        return None
+    return TableOfContents(paragraphs=paragraphs)
+
+
+def _extract_local_toc_from_path(pdf_path: Path) -> TableOfContents | None:
+    reader = PdfReader(pdf_path)
+    if not reader.pages:
+        raise ValueError(f"PDF contains no pages: {pdf_path}")
+    return _extract_local_toc(reader)
 
 
 def _normalize_text(value: str) -> str:
@@ -127,6 +183,14 @@ def _find_title_pages(reader: PdfReader, title: str) -> list[int]:
                 return matches
 
     return []
+
+
+def _find_title_page(reader: PdfReader, title: str) -> int:
+    """Return the first matching page for backward compatibility."""
+    matches = _find_title_pages(reader, title)
+    if not matches:
+        raise ValueError(f"Could not find paragraph title in PDF: {title}")
+    return matches[0]
 
 
 def _find_page_offset(
@@ -291,13 +355,26 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
 
 
 async def parse_book(
-    path: str | Path, client: AsyncOpenAI | None = None, attemps: int = 3
+    path: str | Path, client: AsyncOpenAI | None = None, attempts: int = 3
 ) -> BookMetadata:
     pdf_path = Path(path)
+    if attempts <= 0:
+        raise ValueError("attempts must be greater than zero")
+
+    local_toc = await asyncio.to_thread(_extract_local_toc_from_path, pdf_path)
+    if local_toc is not None:
+        logger.info(
+            "parsed %s paragraph headings locally: %s",
+            len(local_toc.paragraphs),
+            pdf_path,
+        )
+        return await asyncio.to_thread(_build_book_metadata, pdf_path, local_toc)
+
     toc_text = await asyncio.to_thread(_extract_toc_text_from_path, pdf_path)
     client = client if client is not None else get_async_openai_client()
 
-    for i in range(attemps):
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
         try:
             toc = await _parse_table_of_contents(toc_text, client)
 
@@ -305,8 +382,18 @@ async def parse_book(
                 raise InvalidTOC()
 
             return await asyncio.to_thread(_build_book_metadata, pdf_path, toc)
-        except InvalidTOC:
-            logger.warning(f"failed to parse TOC attempt {i}: {path}", exc_info=True)
+        except APIError as exc:
+            logger.exception("RouterAI failed while parsing TOC: %s", path)
+            raise InvalidTOC(f"RouterAI failed while parsing TOC: {path}") from exc
+        except (InvalidTOC, ValidationError, json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            logger.warning(
+                "failed to parse TOC attempt %s/%s: %s",
+                attempt,
+                attempts,
+                path,
+                exc_info=True,
+            )
 
-    logger.error(f"failed to parse TOC after {attemps} attemps: {path}")
-    raise InvalidTOC(f"Failed to parse TOC: {path}")
+    logger.error("failed to parse TOC after %s attempts: %s", attempts, path)
+    raise InvalidTOC(f"Failed to parse TOC: {path}") from last_error
