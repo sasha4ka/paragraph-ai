@@ -132,9 +132,13 @@ uv run python main.py
 Для локального запуска без домена Caddy использует `localhost`.
 
 ```bash
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 docker compose logs -f app
 ```
+
+По умолчанию Compose загружает образ `ghcr.io/sasha4ka/paragraph-ai:latest`.
+Чтобы выбрать другой тег, задайте `IMAGE_TAG` в окружении, например `IMAGE_TAG=release`.
 
 Caddy автоматически обслуживает HTTPS и проксирует запросы на `app:8000`.
 Приложение пока работает через long polling и не поднимает HTTP-сервер, поэтому

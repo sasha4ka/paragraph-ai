@@ -1,7 +1,7 @@
 services:
   app:
-    build:
-      context: .
+    image: ghcr.io/sasha4ka/paragraph-ai:${IMAGE_TAG:-latest}
+    pull_policy: always
     env_file:
       - .env
     volumes:
