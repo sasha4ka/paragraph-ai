@@ -13,3 +13,9 @@ class Summarize(StatesGroup):
     select_book = State()
     select_paragraphs = State()
     chat_mode = State()
+
+
+class Feedback(StatesGroup):
+    enter_feedback = State()
+    enter_a_name = State()
+    thanks = State()
