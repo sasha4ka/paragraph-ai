@@ -110,7 +110,7 @@ async def handle_feedback(
     await context.set_state(Feedback.thanks)
     await context.update_data(message_id=message_id or reply.message.body.mid)
     logger.info(
-        f"Feedback handled for user {user_id} with name {name} and feedback: {feedback}"
+        f"Feedback handled for user {user_id=} with name {name} and feedback: {feedback}"
     )
 
 

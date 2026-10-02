@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     parsing_model: str = "deepseek/deepseek-v4.1-flash"
     openai_api_token: str | None = None
     max_file_size_mb: int = 20
+    admin_chat_id: int | None = None
 
 
 settings = Settings()  # type: ignore
