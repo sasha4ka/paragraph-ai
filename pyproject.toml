@@ -13,8 +13,10 @@ dependencies = [
     "langchain[openai]>=1.4.2",
     "maxapi[fastapi]>=1.2.2",
     "openai>=3.19.2",
+    "playwright>=1.63.0",
     "pydantic-settings>=2.15.0",
     "pypdf>=6.0.0",
+    "selectolax>=1.0.0",
     "sqlalchemy>=2.0.54",
 ]
 
@@ -31,5 +33,6 @@ module-root = ""
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.4.0",
     "pytest>=9.1.1",
 ]

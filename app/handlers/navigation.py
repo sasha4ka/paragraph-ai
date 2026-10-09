@@ -71,13 +71,6 @@ async def handle_main_menu(event: MessageCallback, context: MemoryContext):
 
 
 @router.message_callback(
-    F.callback.payload == "navigation:oral_report_cards", Navigation.navigation
-)
-async def handle_oral_report_cards(event: MessageCallback, context: MemoryContext):
-    await event.answer(notification="Функция в разработке. Скоро будет доступна!")
-
-
-@router.message_callback(
     F.callback.payload == "navigation:knowledge_check", Navigation.navigation
 )
 async def handle_knowledge_check(event: MessageCallback, context: MemoryContext):
