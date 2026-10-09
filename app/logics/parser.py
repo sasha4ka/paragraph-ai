@@ -15,6 +15,7 @@ from app.openai import APIError, AsyncOpenAI, get_async_openai_client
 from app.settings import settings
 
 logger = logging.getLogger("book-parser")
+logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
 
 class TableOfContentsEntry(BaseModel):
@@ -83,69 +84,25 @@ def _extract_toc_text(reader: PdfReader) -> str:
         set(range(min(10, page_count)))
         | set(range(max(0, page_count - 10), page_count))
     )
-    return "\n".join(
-        f"--- PDF page {page_number + 1} ---\n"
-        f"{reader.pages[page_number].extract_text() or ''}"
-        for page_number in page_numbers
-    )
-
-
-def _is_heading_line(value: str) -> bool:
-    """Return whether a line looks like an uppercase title continuation."""
-    letters = [character for character in value if character.isalpha()]
-    return bool(letters) and sum(character.isupper() for character in letters) / len(
-        letters
-    ) >= 0.8
-
-
-def _extract_local_toc(reader: PdfReader) -> TableOfContents | None:
-    """Extract numbered ``§`` headings directly from searchable PDF text."""
-    paragraphs: dict[str, TableOfContentsEntry] = {}
-    heading_pattern = re.compile(r"^\s*§\s*(\d+)\s*[.]?\s*(.*?)\s*$")
-
-    for file_page, page in enumerate(reader.pages):
-        lines = (page.extract_text() or "").splitlines()
-        printed_page = next(
-            (
-                int(line.strip())
-                for line in lines[:5]
-                if re.fullmatch(r"\s*\d+\s*", line)
-            ),
-            file_page + 1,
+    page_texts: list[str] = []
+    for page_number in page_numbers:
+        page_text = reader.pages[page_number].extract_text() or ""
+        logger.debug(
+            "TOC input PDF page %s/%s: extracted_chars=%s",
+            page_number + 1,
+            page_count,
+            len(page_text),
         )
+        page_texts.append(f"--- PDF page {page_number + 1} ---\n{page_text}")
 
-        for line_index, line in enumerate(lines):
-            match = heading_pattern.fullmatch(line)
-            if match is None:
-                continue
-
-            number, first_title_line = match.groups()
-            if number in paragraphs or not first_title_line:
-                continue
-
-            title_lines = [first_title_line.strip()]
-            for continuation in lines[line_index + 1 : line_index + 4]:
-                continuation = continuation.strip()
-                if not continuation or not _is_heading_line(continuation):
-                    break
-                title_lines.append(continuation)
-
-            title = re.sub(r"\s+", " ", " ".join(title_lines)).strip()
-            paragraphs[number] = TableOfContentsEntry(
-                book_page_start=printed_page,
-                title=f"§ {number}. {title}",
-            )
-
-    if not paragraphs:
-        return None
-    return TableOfContents(paragraphs=paragraphs)
-
-
-def _extract_local_toc_from_path(pdf_path: Path) -> TableOfContents | None:
-    reader = PdfReader(pdf_path)
-    if not reader.pages:
-        raise ValueError(f"PDF contains no pages: {pdf_path}")
-    return _extract_local_toc(reader)
+    text = "\n".join(page_texts)
+    logger.debug(
+        "Prepared TOC input: pdf_pages=%s, selected_pages=%s, total_chars=%s",
+        page_count,
+        [page_number + 1 for page_number in page_numbers],
+        len(text),
+    )
+    return text
 
 
 def _normalize_text(value: str) -> str:
@@ -200,7 +157,18 @@ def _find_page_offset(
     anchors = [
         entry for entry in entries[:20] if len(_normalize_text(entry[1].title)) >= 20
     ][:10]
+    logger.debug(
+        "Finding PDF page offset: toc_entries=%s, anchors=%s",
+        len(entries),
+        [
+            f"{number}: printed_page={entry.book_page_start}, title={entry.title!r}"
+            for number, entry in anchors
+        ],
+    )
     if not anchors:
+        logger.warning(
+            "Cannot calculate PDF page offset: no sufficiently specific anchors"
+        )
         raise ValueError(
             "Could not find sufficiently specific TOC entries for page offset"
         )
@@ -208,8 +176,19 @@ def _find_page_offset(
     matches_by_entry = [
         (entry, _find_title_pages(reader, entry[1].title)) for entry in anchors
     ]
+    for entry, page_numbers in matches_by_entry:
+        logger.debug(
+            "TOC anchor match: id=%s, printed_page=%s, matching_pdf_pages=%s, title=%r",
+            entry[0],
+            entry[1].book_page_start,
+            [page_number + 1 for page_number in page_numbers],
+            entry[1].title,
+        )
     matches_by_entry = [item for item in matches_by_entry if item[1]]
     if not matches_by_entry:
+        logger.warning(
+            "Cannot calculate PDF page offset: none of the TOC anchors matched"
+        )
         raise ValueError(
             "Could not find TOC entries in PDF while calculating page offset"
         )
@@ -236,12 +215,31 @@ def _find_page_offset(
 
     support, _, offset = max(scored_offsets)
     required_support = max(2, (len(matches_by_entry) + 1) // 2)
+    logger.debug(
+        "PDF page-offset candidates: scores=%s, selected_offset=%s, "
+        "support=%s/%s, required_support=%s",
+        sorted(scored_offsets, reverse=True),
+        offset,
+        support,
+        len(matches_by_entry),
+        required_support,
+    )
     if support < required_support:
+        logger.warning(
+            "Inconsistent PDF page offset: best candidate has support %s/%s; need %s",
+            support,
+            len(matches_by_entry),
+            required_support,
+        )
         raise ValueError(
             "Could not determine a consistent page offset: "
             f"{support}/{len(matches_by_entry)} anchors agree"
         )
 
+    logger.info(
+        "Resolved PDF page offset: offset=%s (PDF page index = printed page + offset)",
+        offset,
+    )
     return offset
 
 
@@ -271,6 +269,12 @@ def _build_book_metadata(pdf_path: Path, toc: TableOfContents) -> BookMetadata:
     ordered_paragraphs = sorted(
         toc.paragraphs.items(), key=lambda item: item[1].book_page_start
     )
+    logger.debug(
+        "Building metadata for %s: pdf_pages=%s, toc_entries=%s",
+        pdf_path,
+        len(reader.pages),
+        len(ordered_paragraphs),
+    )
     page_offset = _find_page_offset(reader, ordered_paragraphs)
 
     paragraphs: dict[str, BookParagraph] = {}
@@ -294,7 +298,16 @@ def _build_book_metadata(pdf_path: Path, toc: TableOfContents) -> BookMetadata:
             file_start=file_start,
             file_end=min(file_end, len(reader.pages) - 1),
         )
+        logger.debug(
+            "Mapped TOC entry id=%s title=%r printed_page=%s to PDF pages %s-%s",
+            number,
+            entry.title,
+            entry.book_page_start,
+            file_start + 1,
+            min(file_end, len(reader.pages) - 1) + 1,
+        )
 
+    logger.info("Built book metadata: paragraphs=%s, pdf=%s", len(paragraphs), pdf_path)
     return BookMetadata(
         title="",
         pdf_path=pdf_path,
@@ -337,6 +350,12 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
         response_format={"type": "json_object"},
         messages=messages,
     )
+    logger.debug(
+        "TOC model response received: model=%s, choices=%s, usage=%s",
+        settings.parsing_model,
+        len(response.choices),
+        getattr(response, "usage", None),
+    )
     if not response.choices:
         raise InvalidTOC("LLM returned no choices while extracting table of contents")
 
@@ -349,9 +368,27 @@ async def _parse_table_of_contents(text: str, client: AsyncOpenAI) -> TableOfCon
         raise InvalidTOC("LLM returned an invalid table of contents format")
 
     try:
-        return TableOfContents.model_validate(_normalize_toc_payload(payload))
+        toc = TableOfContents.model_validate(_normalize_toc_payload(payload))
     except ValidationError as exc:
+        logger.warning("Model TOC failed schema validation: %s", exc)
         raise InvalidTOC from exc
+
+    logger.info("Model returned %s TOC entries", len(toc.paragraphs))
+    for paragraph_id, entry in sorted(
+        toc.paragraphs.items(), key=lambda item: item[1].book_page_start
+    )[:20]:
+        logger.debug(
+            "Model TOC entry: id=%s, printed_page=%s, title=%r",
+            paragraph_id,
+            entry.book_page_start,
+            entry.title,
+        )
+    if len(toc.paragraphs) > 20:
+        logger.debug(
+            "Omitting %s additional TOC entries from debug log",
+            len(toc.paragraphs) - 20,
+        )
+    return toc
 
 
 async def parse_book(
@@ -361,21 +398,19 @@ async def parse_book(
     if attempts <= 0:
         raise ValueError("attempts must be greater than zero")
 
-    local_toc = await asyncio.to_thread(_extract_local_toc_from_path, pdf_path)
-    if local_toc is not None:
-        logger.info(
-            "parsed %s paragraph headings locally: %s",
-            len(local_toc.paragraphs),
-            pdf_path,
-        )
-        return await asyncio.to_thread(_build_book_metadata, pdf_path, local_toc)
-
     toc_text = await asyncio.to_thread(_extract_toc_text_from_path, pdf_path)
     client = client if client is not None else get_async_openai_client()
 
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
+            logger.info(
+                "Parsing book TOC: attempt=%s/%s, pdf=%s, input_chars=%s",
+                attempt,
+                attempts,
+                pdf_path,
+                len(toc_text),
+            )
             toc = await _parse_table_of_contents(toc_text, client)
 
             if not toc.paragraphs:
@@ -383,15 +418,22 @@ async def parse_book(
 
             return await asyncio.to_thread(_build_book_metadata, pdf_path, toc)
         except APIError as exc:
-            logger.exception("RouterAI failed while parsing TOC: %s", path)
+            logger.exception(
+                "LLM API error while parsing TOC: attempt=%s/%s, pdf=%s",
+                attempt,
+                attempts,
+                pdf_path,
+            )
             raise InvalidTOC(f"RouterAI failed while parsing TOC: {path}") from exc
         except (InvalidTOC, ValidationError, json.JSONDecodeError, ValueError) as exc:
             last_error = exc
             logger.warning(
-                "failed to parse TOC attempt %s/%s: %s",
+                "Failed to parse TOC: attempt=%s/%s, pdf=%s, error_type=%s, error=%s",
                 attempt,
                 attempts,
-                path,
+                pdf_path,
+                type(exc).__name__,
+                exc,
                 exc_info=True,
             )
 
