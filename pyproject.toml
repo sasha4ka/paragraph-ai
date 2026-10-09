@@ -11,7 +11,7 @@ dependencies = [
     "alembic>=1.20.0",
     "fonttools>=4.66.0",
     "langchain[openai]>=1.4.2",
-    "maxapi>=1.2.2",
+    "maxapi[fastapi]>=1.2.2",
     "openai>=3.19.2",
     "pydantic-settings>=2.15.0",
     "pypdf>=6.0.0",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-paragraph-ai = "paragraph_ai:main"
+paragraph-ai = "app.app:main"
 
 [build-system]
 requires = ["uv_build>=0.8.12,<0.9.0"]
