@@ -1,44 +1,28 @@
+from collections.abc import Iterator
 from typing import Any
 
-from lxml import html
+from selectolax.lexbor import LexborHTMLParser as html
 
 allowed_tags: dict[str, dict[str, Any]] = {
-    "div": {
-        "allowed-attributes": {"class"},
+    "card-body": {
         "allowed-children": {
-            "div",
             "p",
+            "code",
+            "table",
             "h1",
             "h2",
             "h3",
             "h4",
             "ul",
             "ol",
-            "table",
+            "dl",
             "formula",
-            "inline-formula",
-        },
+            "strong",
+            "em",
+            "i",
+        }
     },
-    "section": {
-        "allowed-attributes": {"class"},
-        "allowed-children": {
-            "div",
-            "p",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "ul",
-            "ol",
-            "table",
-            "formula",
-            "inline-formula",
-        },
-    },
-    "span": {
-        "allowed-attributes": {"class"},
-        "allowed-children": {"b", "i", "s", "code", "strong", "em", "inline-formula"},
-    },
+    "card-title": {},
     "p": {
         "allowed-children": {"b", "i", "s", "code", "strong", "em", "inline-formula"},
     },
@@ -49,6 +33,8 @@ allowed_tags: dict[str, dict[str, Any]] = {
         "allowed-attributes": {"class"},
         "allowed-children": {"thead", "tbody", "tr"},
     },
+    "thead": {"allowed-children": {"tr"}},
+    "tbody": {"allowed-children": {"tr"}},
     "tr": {
         "allowed-children": {"td", "th"},
     },
@@ -94,24 +80,54 @@ def validate(html_text: str) -> bool:
     """
 
     try:
-        parser = html.HTMLParser(remove_comments=True, recover=False)
-        tree = html.fromstring(html_text, parser=parser)
-    except Exception:
+        tree = html(html_text)
+    except (TypeError, ValueError):
         return False
 
-    for element in tree.iter():
-        tag = element.tag
-        if tag not in allowed_tags:
+    root = tree.root
+    head = tree.css_first("head")
+    body = tree.css_first("body")
+    if root is None or body is None or root.attributes or body.attributes:
+        return False
+
+    # Lexbor wraps fragments in <html><head/><body>...</body></html>.
+    # Content in <head> is not part of a layout and must not bypass validation.
+    if head is not None and any(_element_children(head)):
+        return False
+
+    body_children = list(_element_children(body))
+    if len(body_children) != 2:
+        return False
+    title, card_body = body_children
+
+    if title.tag != "card-title" or card_body.tag != "card-body":
+        return False
+
+    def _validate_node(node: Any) -> bool:
+        if node.tag not in allowed_tags:
             return False
 
-        allowed_attributes = allowed_tags[tag].get("allowed-attributes", set())
-        for attr in element.attrib:
+        allowed_attributes = allowed_tags[node.tag].get("allowed-attributes", set())
+        for attr in node.attributes:
             if attr not in allowed_attributes:
                 return False
 
-        allowed_children = allowed_tags[tag].get("allowed-children", set())
-        for child in element:
+        allowed_children = allowed_tags[node.tag].get("allowed-children", set())
+        for child in _element_children(node):
             if child.tag not in allowed_children:
                 return False
+            if not _validate_node(child):
+                return False
 
-    return True
+        return True
+
+    return _validate_node(title) and _validate_node(card_body)
+
+
+def _element_children(node: Any) -> Iterator[Any]:
+    """Yield a node's direct element children, excluding text and comments."""
+    child = node.child
+    while child is not None:
+        if child.is_element_node:
+            yield child
+        child = child.next
