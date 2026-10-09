@@ -102,7 +102,7 @@ async def select_book_for_delete(event: MessageCallback, context: MemoryContext)
 
 
 @router.message_created(F.message.body.text, ManageBooks.select_book_name)
-async def upload_book(event: MessageCallback, context: MemoryContext):
+async def upload_book(event: MessageCreated, context: MemoryContext):
     await context.set_state(ManageBooks.upload_book)
 
     message = await event.message.answer(
