@@ -1,6 +1,6 @@
 import logging
 
-from maxapi import Router
+from maxapi import F, Router
 from maxapi.context import MemoryContext
 from maxapi.types import (
     BotStarted,
@@ -60,6 +60,7 @@ async def handle_start(event: BotStarted | MessageCreated, context: MemoryContex
 
 router.bot_started.register(handle_start)
 router.message_created.register(handle_start, Command("start"))
+router.message_created.register(handle_start, F.message.body.text == "Главное меню")
 
 
 @router.bot_stopped

@@ -19,6 +19,7 @@ from app.handlers.manage_books.utils import (
     compile_books_list,
     download_file,
 )
+from app.handlers.start.router import start_menu
 from app.settings import settings
 from app.states import ManageBooks
 
@@ -102,7 +103,7 @@ async def select_book_for_delete(event: MessageCallback, context: MemoryContext)
 
 
 @router.message_created(F.message.body.text, ManageBooks.select_book_name)
-async def upload_book(event: MessageCallback, context: MemoryContext):
+async def upload_book(event: MessageCreated, context: MemoryContext):
     await context.set_state(ManageBooks.upload_book)
 
     message = await event.message.answer(
@@ -262,6 +263,12 @@ router.message_callback.register(
 router.message_callback.register(
     cancel, F.callback.payload == "processing:to_menu", ManageBooks.processing_book
 )
+
+
+@router.message_callback(F.callback.payload == "menu:exit", ManageBooks.main_menu)
+async def exit_menu(event: MessageCallback, context: MemoryContext):
+    await context.clear()
+    await start_menu(message_id=event.message.body.mid, context=context)
 
 
 # ----------------

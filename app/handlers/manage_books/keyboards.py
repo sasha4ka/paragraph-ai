@@ -7,6 +7,8 @@ def menu_keyboard(only_add: bool = False):
     builder.add(CallbackButton(text="Добавить", payload="menu:add"))
     if not only_add:
         builder.add(CallbackButton(text="Удалить", payload="menu:delete"))
+    builder.adjust(2)
+    builder.add(CallbackButton(text="Выйти", payload="menu:exit"))
     return builder.as_markup()
 
 
