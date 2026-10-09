@@ -72,6 +72,11 @@ async def run_polling() -> None:
         await bot.close_session()
 
 
+@app.get("/healthcheck")
+async def healthcheck():
+    return {"status": "healthy"}
+
+
 def main() -> None:
     if settings.debug:
         asyncio.run(run_polling())
