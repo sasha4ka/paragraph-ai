@@ -1,11 +1,16 @@
 import asyncio
 import logging
+import tempfile
+from pathlib import Path
 
 from maxapi import F, Router
 from maxapi.context import MemoryContext
 from maxapi.enums import ParseMode
 from maxapi.methods.types.sended_message import SendedMessage
 from maxapi.types import CallbackButton, MessageCallback, MessageCreated
+from maxapi.types.attachments.attachment import Attachment
+from maxapi.types.attachments.upload import AttachmentUpload
+from maxapi.types.input_media import InputMedia, InputMediaBuffer
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from app.books import BooksRepository
@@ -13,6 +18,7 @@ from app.bot import get_bot
 from app.exc import GenerationError
 from app.handlers.manage_books.utils import compile_books_list
 from app.handlers.navigation import go_to_navigation
+from app.logics.layout.renderer import render_html
 from app.logics.select_paragraph import (
     ParagraphSelectionError,
 )
@@ -20,12 +26,16 @@ from app.logics.select_paragraph import (
     select_paragraphs as resolve_paragraphs,
 )
 from app.logics.summary.models import BakedBlock, SourceParagraph
-from app.logics.summary.summary_generator import generate_summary
+from app.logics.summary.summary_generator import (
+    generate_card_summary,
+    generate_text_summary,
+)
 from app.states import Navigation, Summarize
 
 router = Router()
 
 logger = logging.getLogger("summarizer")
+MAX_CARD_IMAGES_PER_MESSAGE = 12
 
 
 def exit_keyboard():
@@ -44,6 +54,19 @@ def cancel_keyboard():
     F.callback.payload == "navigation:oral_report", Navigation.navigation
 )
 async def start_summarize(event: MessageCallback, context: MemoryContext):
+    await _start_summarize_workflow(event, context, mode="text")
+
+
+@router.message_callback(
+    F.callback.payload == "navigation:oral_report_cards", Navigation.navigation
+)
+async def start_card_summarize(event: MessageCallback, context: MemoryContext):
+    await _start_summarize_workflow(event, context, mode="cards")
+
+
+async def _start_summarize_workflow(
+    event: MessageCallback, context: MemoryContext, mode: str
+):
     books = BooksRepository().list_books()
     if not books:
         await event.answer(
@@ -51,7 +74,7 @@ async def start_summarize(event: MessageCallback, context: MemoryContext):
         )
         return
 
-    await context.update_data(books=books)
+    await context.update_data(books=books, summary_mode=mode)
     await context.set_state(Summarize.select_book)
 
     text = f"Выберите книгу:\n{'\n'.join(compile_books_list(books))}"
@@ -132,8 +155,10 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         logger.info(
             f"summarizing {book.metadata.title} {source_item.title} {mid=} {uid=}"
         )
+        mode = data.get("summary_mode", "text")
+        generate = generate_card_summary if mode == "cards" else generate_text_summary
         result: list[BakedBlock] | None = None
-        async for generation_event in generate_summary(source_item):
+        async for generation_event in generate(source_item):
             match generation_event.status:
                 case "cleaning":
                     logger.info(f"cleaning text {mid=} {uid=}")
@@ -158,6 +183,8 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
 
         if result is None:
             raise GenerationError("Summary didn't generated")
+        if mode == "cards":
+            await _send_card_blocks(event, result)
 
     except Exception:
         await _delete_processing_message(processing_message)
@@ -168,6 +195,9 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         return
 
     await _delete_processing_message(processing_message)
+    if mode == "cards":
+        return
+
     for i, block in enumerate(result):
         chunks = _split_message(block.text)
         for j, chunk in enumerate(chunks):
@@ -178,6 +208,33 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
             else:
                 await event.message.answer(text=chunk, format=ParseMode.HTML)
         await asyncio.sleep(0.5)
+
+
+async def _send_card_blocks(event: MessageCreated, blocks: list[BakedBlock]) -> None:
+    if not blocks:
+        raise GenerationError("Card workflow returned no cards")
+
+    with tempfile.TemporaryDirectory(prefix="paragraph-cards-") as temp_dir:
+        for batch_start in range(0, len(blocks), MAX_CARD_IMAGES_PER_MESSAGE):
+            batch = blocks[
+                batch_start : batch_start + MAX_CARD_IMAGES_PER_MESSAGE
+            ]
+            attachments: list[
+                Attachment | InputMedia | InputMediaBuffer | AttachmentUpload
+            ] = []
+            for offset, block in enumerate(batch):
+                image_index = batch_start + offset
+                image_path = Path(temp_dir) / f"card-{image_index + 1}.png"
+                await render_html(block.text, image_path)
+                attachments.append(InputMedia(str(image_path)))
+
+            await event.message.answer(
+                attachments=attachments,
+            )
+            if batch_start + len(batch) < len(blocks):
+                await asyncio.sleep(0.5)
+
+    await event.message.answer(attachments=[exit_keyboard()])
 
 
 def _split_message(text: str, limit: int = 3900) -> list[str]:
