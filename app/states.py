@@ -19,3 +19,7 @@ class Feedback(StatesGroup):
     enter_feedback = State()
     enter_a_name = State()
     thanks = State()
+
+
+class Navigation(StatesGroup):
+    navigation = State()

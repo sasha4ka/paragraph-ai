@@ -5,13 +5,14 @@ from maxapi import F, Router
 from maxapi.context import MemoryContext
 from maxapi.enums import ParseMode
 from maxapi.methods.types.sended_message import SendedMessage
-from maxapi.types import CallbackButton, MessageCreated
+from maxapi.types import CallbackButton, MessageCallback, MessageCreated
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from app.books import BooksRepository
 from app.bot import get_bot
 from app.exc import GenerationError
 from app.handlers.manage_books.utils import compile_books_list
+from app.handlers.navigation import go_to_navigation
 from app.logics.select_paragraph import (
     ParagraphSelectionError,
 )
@@ -20,7 +21,7 @@ from app.logics.select_paragraph import (
 )
 from app.logics.summary.models import BakedBlock, SourceParagraph
 from app.logics.summary.summary_generator import generate_summary
-from app.states import Summarize
+from app.states import Navigation, Summarize
 
 router = Router()
 
@@ -39,19 +40,23 @@ def cancel_keyboard():
     return builder.as_markup()
 
 
-@router.message_created(F.message.body.text == "Конспект")
-async def start_summarize(event: MessageCreated, context: MemoryContext):
-    await context.set_state(Summarize.select_book)
-
+@router.message_callback(
+    F.callback.payload == "navigation:oral_report", Navigation.navigation
+)
+async def start_summarize(event: MessageCallback, context: MemoryContext):
     books = BooksRepository().list_books()
-    await context.update_data(books=books)
     if not books:
-        await event.message.answer(text="У вас пока нет загруженных учебников.")
+        await event.answer(
+            notification="У вас пока нет загруженных учебников.", notify=True
+        )
         return
+
+    await context.update_data(books=books)
+    await context.set_state(Summarize.select_book)
 
     text = f"Выберите книгу:\n{'\n'.join(compile_books_list(books))}"
 
-    await event.message.answer(text=text, attachments=[cancel_keyboard()])
+    await event.message.edit(text=text, attachments=[cancel_keyboard()])
 
 
 @router.message_created(F.message.body.text, Summarize.select_book)
@@ -163,9 +168,15 @@ async def select_paragraphs(event: MessageCreated, context: MemoryContext):
         return
 
     await _delete_processing_message(processing_message)
-    for block in result:
-        for chunk in _split_message(block.text):
-            await event.message.answer(text=chunk, format=ParseMode.HTML)
+    for i, block in enumerate(result):
+        chunks = _split_message(block.text)
+        for j, chunk in enumerate(chunks):
+            if i == len(result) - 1 and j == len(chunks) - 1:
+                await event.message.answer(
+                    text=chunk, format=ParseMode.HTML, attachments=[exit_keyboard()]
+                )
+            else:
+                await event.message.answer(text=chunk, format=ParseMode.HTML)
         await asyncio.sleep(0.5)
 
 
@@ -205,3 +216,20 @@ def _event_paragraph_id(paragraph_id: str, index: int) -> int:
         return int(paragraph_id)
     except ValueError:
         return index + 1
+
+
+@router.message_callback(
+    F.callback.payload == "Summarize.chat_mode:exit", Summarize.chat_mode
+)
+async def exit_chat_mode(event: MessageCallback, context: MemoryContext):
+    await go_to_navigation(event, context, new_message=True)
+
+
+@router.message_callback(F.callback.payload == "cancel", Summarize.select_book)
+async def cancel_selection(event: MessageCallback, context: MemoryContext):
+    await go_to_navigation(event, context)
+
+
+@router.message_callback(F.callback.payload == "cancel", Summarize.select_paragraphs)
+async def cancel_selection_1(event: MessageCallback, context: MemoryContext):
+    await go_to_navigation(event, context)
