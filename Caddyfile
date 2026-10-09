@@ -1,4 +1,4 @@
 {$DOMAIN} {
-	# The app is currently polling-only. This upstream is for its future HTTP/webhook handler.
+	# HTTPS requests are forwarded to the FastAPI webhook backend.
 	reverse_proxy app:8000
 }

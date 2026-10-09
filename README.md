@@ -107,6 +107,10 @@ uv sync
 ```env
 # Бот MAX
 API_TOKEN=your_maxapi_token_here
+DEBUG=False
+WEBHOOK_URL=https://bot.example.com/webhook
+# Необязательно: тот же секрет будет использован при регистрации webhook в MAX.
+WEBHOOK_SECRET=your_webhook_secret
 
 # RouterAI через OpenAI-совместимый API
 OPENAI_API_TOKEN=your_routerai_key_here
@@ -140,8 +144,14 @@ docker compose logs -f app
 По умолчанию Compose загружает образ `ghcr.io/sasha4ka/paragraph-ai:latest`.
 Чтобы выбрать другой тег, задайте `IMAGE_TAG` в окружении, например `IMAGE_TAG=release`.
 
-Caddy автоматически обслуживает HTTPS и проксирует запросы на `app:8000`.
-Приложение пока работает через long polling и не поднимает HTTP-сервер, поэтому
-прокси станет рабочим для вебхуков после добавления HTTP/webhook-обработчика.
+В обычном режиме (`DEBUG=False`, значение по умолчанию) приложение запускает
+FastAPI и регистрирует `WEBHOOK_URL` в MAX. URL должен быть публичным HTTPS-адресом
+и оканчиваться на `/webhook`. `WEBHOOK_SECRET` необязателен; если он задан,
+приложение проверяет секретный заголовок MAX.
+
+Для локальной разработки задайте `DEBUG=True`: приложение переключится на long
+polling и удалит подписки webhook, которые мешают polling. `WEBHOOK_URL` в этом
+режиме не требуется. Не используйте этот режим одновременно с production-инстансом
+того же бота.
 Каталог `books/` исключён из образа; загружайте книги через бота — они хранятся
 в Docker volume `books_data` и переживают пересоздание контейнера.
