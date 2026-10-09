@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     default_model: str = "openai/gpt-6-luna"
     parsing_model: str = "deepseek/deepseek-v4.1-flash"
     openai_api_token: str | None = None
+    max_file_size_mb: int = 20
+    admin_chat_id: int | None = None
+    debug: bool = False
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
 
 
 settings = Settings()  # type: ignore

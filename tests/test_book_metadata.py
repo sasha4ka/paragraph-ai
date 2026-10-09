@@ -1,8 +1,8 @@
 import pytest
 
-from app.handlers.summarize.router import _truncate_summary
 from app.logics.parser import (
     TableOfContentsEntry,
+    _extract_local_toc,
     _find_page_offset,
     _find_title_page,
     _get_file_end,
@@ -75,13 +75,32 @@ def test_file_end_includes_page_where_next_section_starts():
     assert _get_file_end(0, entries, page_offset=3, page_count=20) == 15
 
 
-def test_summary_is_truncated_after_3900_characters():
-    summary = "x" * 4000
+def test_extract_local_toc_reads_multiline_paragraph_titles():
+    class Page:
+        def __init__(self, text):
+            self.text = text
 
-    truncated = _truncate_summary(summary)
+        def extract_text(self):
+            return self.text
 
-    assert len(truncated) == 3903
-    assert truncated == "x" * 3900 + "..."
+    class Reader:
+        def __init__(self):
+            self.pages = [
+                Page("6\n§ 1. ПРЕДМЕТ\nОРГАНИЧЕСКОЙ ХИМИИ\nОбычный текст."),
+                Page(
+                    "10\nЗадания\n§ 2. ОСНОВНЫЕ ПОЛОЖЕНИЯ\n"
+                    "ТЕОРИИ СТРОЕНИЯ\nТекст."
+                ),
+                Page("127\n§ 1. 5. Ответ из приложения"),
+            ]
+
+    toc = _extract_local_toc(Reader())
+
+    assert toc is not None
+    assert list(toc.paragraphs) == ["1", "2"]
+    assert toc.paragraphs["1"].title == "§ 1. ПРЕДМЕТ ОРГАНИЧЕСКОЙ ХИМИИ"
+    assert toc.paragraphs["1"].book_page_start == 6
+    assert toc.paragraphs["2"].book_page_start == 10
 
 
 def test_find_page_offset_uses_consensus_of_multiple_entries():
@@ -93,12 +112,13 @@ def test_find_page_offset_uses_consensus_of_multiple_entries():
             return self.text
 
     class Reader:
-        pages = [
-            Page("First distinctive section"),
-            Page("Second distinctive section"),
-            Page("Third distinctive section"),
-            Page("First distinctive section"),
-        ]
+        def __init__(self):
+            self.pages = [
+                Page("First distinctive section"),
+                Page("Second distinctive section"),
+                Page("Third distinctive section"),
+                Page("First distinctive section"),
+            ]
 
     entries = [
         (
