@@ -82,6 +82,14 @@ DEBUG=True
 uv run python main.py
 ```
 
+Для отдельного рендеринга карточки передайте HTML в stdin, а путь к PNG/JPEG укажите аргументом:
+
+```bash
+uv run python scripts/render_card.py /tmp/card.png < card.html
+```
+
+Если зависимости KaTeX ещё не установлены локально, выполните `npm ci` в каталоге `renderer`.
+
 При `DEBUG=True` приложение использует polling и удаляет существующие webhook-подписки этого бота. Не запускайте этот режим одновременно с production-инстансом, использующим тот же токен.
 
 ## Конфигурация

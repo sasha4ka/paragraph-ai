@@ -72,8 +72,16 @@ class FakePlaywrightManager:
         return self.browser
 
 
-def _patch_playwright(monkeypatch: pytest.MonkeyPatch, page: FakePage) -> FakeBrowser:
+def _patch_playwright(
+    monkeypatch: pytest.MonkeyPatch, page: FakePage, tmp_path: Path
+) -> FakeBrowser:
     browser = FakeBrowser(page)
+    katex_dist = tmp_path / "katex" / "dist"
+    (katex_dist / "fonts").mkdir(parents=True)
+    (katex_dist / "katex.min.css").write_text(
+        "@font-face { src: url(fonts/KaTeX_Main.woff2); }", encoding="utf-8"
+    )
+    monkeypatch.setattr(renderer, "KATEX_DIST", katex_dist)
     monkeypatch.setattr(
         renderer, "async_playwright", lambda: FakePlaywrightManager(browser)
     )
@@ -94,8 +102,15 @@ def test_render_html_uses_single_column_and_applies_card_style(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     page = FakePage(use_two_columns=False)
-    browser = _patch_playwright(monkeypatch, page)
+    browser = _patch_playwright(monkeypatch, page, tmp_path)
     output = tmp_path / "card.png"
+    rendered_formulas: list[tuple[str, bool]] = []
+
+    async def fake_render_formula(tex: str, *, display_mode: bool = False) -> str:
+        rendered_formulas.append((tex, display_mode))
+        return f'<span class="katex">{tex}</span>'
+
+    monkeypatch.setattr(renderer, "render_formula", fake_render_formula)
 
     asyncio.run(
         render_html(
@@ -111,9 +126,15 @@ def test_render_html_uses_single_column_and_applies_card_style(
     assert "text-align: center" in page.document
     assert "background: rgba(255, 255, 255, .58)" in page.document
     assert "backdrop-filter: blur(24px) saturate(140%)" in page.document
-    assert "color: #8659ab" in page.document
-    assert 'content: "[Формула]"' in page.document
-    assert 'content: "[формула]"' in page.document
+    assert '<span class="katex">x + y</span>' in page.document
+    assert '<span class="katex">x = y</span>' in page.document
+    assert 'content: "[Формула]"' not in page.document
+    assert 'content: "[формула]"' not in page.document
+    assert (
+        "url(file://" + str(tmp_path) + "/katex/dist/fonts/KaTeX_Main.woff2)"
+        in page.document
+    )
+    assert rendered_formulas == [("x + y", False), ("x = y", True)]
     assert browser.initial_viewport == {"width": 800, "height": 1000}
     assert page.viewport is None
     assert page.screenshot_options == {
@@ -128,7 +149,7 @@ def test_render_html_switches_to_two_columns_for_overflow(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     page = FakePage(use_two_columns=True)
-    browser = _patch_playwright(monkeypatch, page)
+    browser = _patch_playwright(monkeypatch, page, tmp_path)
     output = tmp_path / "card.jpg"
 
     asyncio.run(
@@ -142,7 +163,7 @@ def test_render_html_switches_to_two_columns_for_overflow(
     assert page.screenshot_options == {
         "path": str(output),
         "type": "jpeg",
-        "quality": 90,
+        "quality": 100,
         "full_page": False,
     }
     assert browser.closed
@@ -152,7 +173,7 @@ def test_render_html_rejects_content_that_overflows_two_columns(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     page = FakePage(use_two_columns=True, content_fits=False)
-    browser = _patch_playwright(monkeypatch, page)
+    browser = _patch_playwright(monkeypatch, page, tmp_path)
 
     with pytest.raises(ValueError, match="split it across multiple cards"):
         asyncio.run(

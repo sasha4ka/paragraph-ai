@@ -29,6 +29,7 @@ RUN uv sync --locked --no-dev --no-install-project \
 
 COPY README.md main.py ./
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 COPY --from=katex /usr/local/bin/node /usr/local/bin/node
 COPY --from=katex /renderer/ /app/renderer/
 RUN uv sync --locked --no-dev \

@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 from typing import cast
 
-_RENDERER_SCRIPT = (
-    Path(__file__).resolve().parents[3] / "renderer" / "render_formula.cjs"
-)
+_RENDERER_DIR = Path(__file__).resolve().parents[3] / "renderer"
+KATEX_DIST = _RENDERER_DIR / "node_modules" / "katex" / "dist"
+_RENDERER_SCRIPT = _RENDERER_DIR / "render_formula.cjs"
 _RENDER_TIMEOUT_SECONDS = 15
 _MAX_TEX_LENGTH = 10_000
 
