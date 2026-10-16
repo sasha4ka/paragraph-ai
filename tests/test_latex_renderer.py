@@ -63,3 +63,22 @@ def test_render_formula_reports_katex_errors(monkeypatch: pytest.MonkeyPatch):
 def test_render_formula_validates_input():
     with pytest.raises(ValueError, match="non-empty string"):
         asyncio.run(render_formula(""))
+
+
+def test_render_formula_converts_unicode_vector_arrows(monkeypatch: pytest.MonkeyPatch):
+    process = FakeProcess(b'{"html":"<span class=\\"katex\\">vector</span>"}')
+
+    async def fake_create_subprocess_exec(*args: str, **kwargs: object) -> FakeProcess:
+        return process
+
+    monkeypatch.setattr(
+        latex.asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+
+    asyncio.run(render_formula("v⃗ = v⃗₀ + a⃗t"))
+
+    assert process.payload is not None
+    assert json.loads(process.payload) == {
+        "tex": r"\vec{v} = \vec{v}₀ + \vec{a}t",
+        "displayMode": False,
+    }

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +11,7 @@ KATEX_DIST = _RENDERER_DIR / "node_modules" / "katex" / "dist"
 _RENDERER_SCRIPT = _RENDERER_DIR / "render_formula.cjs"
 _RENDER_TIMEOUT_SECONDS = 15
 _MAX_TEX_LENGTH = 10_000
+_UNICODE_VECTOR_ARROW = re.compile(r"([\w])\u20d7", flags=re.UNICODE)
 
 
 class FormulaRenderError(RuntimeError):
@@ -23,6 +25,10 @@ async def render_formula(tex: str, *, display_mode: bool = False) -> str:
     """
     if not tex or len(tex) > _MAX_TEX_LENGTH:
         raise ValueError("tex must be a non-empty string of at most 10000 characters")
+
+    # KaTeX rejects the combining vector arrow used by some extracted source text.
+    # Convert e.g. "v⃗₀" to the equivalent TeX notation "\\vec{v}₀".
+    tex = _UNICODE_VECTOR_ARROW.sub(r"\\vec{\1}", tex)
 
     try:
         process = await asyncio.create_subprocess_exec(
