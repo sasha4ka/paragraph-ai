@@ -1,3 +1,10 @@
+FROM node:22-slim AS katex
+
+WORKDIR /renderer
+COPY renderer/package.json renderer/package-lock.json ./
+RUN npm ci --omit=dev
+COPY renderer/render_formula.cjs ./
+
 FROM python:3.12-slim
 
 RUN apt-get update \
@@ -22,6 +29,9 @@ RUN uv sync --locked --no-dev --no-install-project \
 
 COPY README.md main.py ./
 COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY --from=katex /usr/local/bin/node /usr/local/bin/node
+COPY --from=katex /renderer/ /app/renderer/
 RUN uv sync --locked --no-dev \
     && /app/.venv/bin/python -c "import pypdf" \
     && useradd --system --uid 10001 --create-home app \

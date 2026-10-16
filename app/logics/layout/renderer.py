@@ -3,6 +3,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 from selectolax.lexbor import LexborHTMLParser
 
+from app.logics.layout.latex import KATEX_DIST, render_formula
 from app.logics.layout.validator import validate
 
 SINGLE_COLUMN_SIZE = (800, 1000)
@@ -96,26 +97,6 @@ _CARD_TEMPLATE = """<!doctype html>
       background: rgba(255, 255, 255, .45);
       font-family: "Courier New", monospace;
     }
-    .card-content formula, .card-content inline-formula {
-      display: inline-block;
-      padding: 2px 8px;
-      border: 1px dashed rgba(16, 42, 56, .65);
-      border-radius: 6px;
-      background: rgba(255, 255, 255, .45);
-      font-size: 0;
-      vertical-align: baseline;
-    }
-    .card-content formula { display: block; width: fit-content; margin: 8px 0; }
-    .card-content formula::before {
-      content: "[Формула]";
-      color: #102a38;
-      font-size: 16px;
-    }
-    .card-content inline-formula::before {
-      content: "[формула]";
-      color: #102a38;
-      font-size: 15px;
-    }
     .two-columns .card-content {
       column-count: 2;
       column-gap: 48px;
@@ -133,7 +114,7 @@ _CARD_TEMPLATE = """<!doctype html>
 </html>"""
 
 
-def _build_document(html_text: str) -> str:
+async def _build_document(html_text: str) -> str:
     if not validate(html_text):
         raise ValueError(
             "Invalid card HTML: expected <card-title> followed by <card-body>"
@@ -144,6 +125,15 @@ def _build_document(html_text: str) -> str:
     card_body = tree.css_first("card-body")
     if title is None or card_body is None:
         raise ValueError("Invalid card HTML: title or body is missing")
+
+    for formula in tree.css("formula, inline-formula"):
+        tex = formula.text()
+        rendered_html = await render_formula(tex, display_mode=formula.tag == "formula")
+        rendered_tree = LexborHTMLParser(rendered_html)
+        rendered_node = rendered_tree.body.child if rendered_tree.body else None
+        if rendered_node is None:
+            raise ValueError("KaTeX returned empty formula markup")
+        formula.replace_with(rendered_node)
 
     before_title, after_title = _CARD_TEMPLATE.split("__CARD_TITLE__", 1)
     before_content, after_content = after_title.split("__CARD_CONTENT__", 1)
@@ -156,9 +146,21 @@ def _build_document(html_text: str) -> str:
     )
 
 
+def _add_katex_styles(document: str) -> str:
+    """Inline KaTeX CSS and resolve its font URLs to local files."""
+    css_path = KATEX_DIST / "katex.min.css"
+    try:
+        css = css_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Cannot read KaTeX stylesheet: {css_path}") from exc
+
+    css = css.replace("url(fonts/", f"url({KATEX_DIST.as_uri()}/fonts/")
+    return document.replace("</head>", f"<style>{css}</style>\n</head>", 1)
+
+
 async def render_html(html_text: str, output: Path) -> None:
     """Render a validated card to a fixed 800x1000 or 1600x1000 image."""
-    document = _build_document(html_text)
+    document = _add_katex_styles(await _build_document(html_text))
     output.parent.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as playwright:
@@ -172,6 +174,7 @@ async def render_html(html_text: str, output: Path) -> None:
                 device_scale_factor=1,
             )
             await page.set_content(document, wait_until="load")
+            await page.evaluate("() => document.fonts.ready.then(() => true)")
             use_two_columns = await page.evaluate(
                 """() => {
               const content = document.querySelector('.card-content');

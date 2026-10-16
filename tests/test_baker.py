@@ -47,4 +47,6 @@ def test_bake_prompt_requests_validator_compatible_html_card(monkeypatch):
     assert "<card-body>Содержимое карточки</card-body>" in prompt
     assert "Не добавляй сведений" in prompt
     assert "Не используй LaTeX и Markdown" in prompt
+    assert "U+20D7" in prompt
+    assert r"\vec{v} = \vec{v}_0 + \vec{a}t" in prompt
     assert "div, span" in prompt
