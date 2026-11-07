@@ -45,6 +45,7 @@ async def handle_navigation(event: MessageCreated, context: MemoryContext):
 async def go_to_navigation(
     event: MessageCallback, context: MemoryContext, new_message: bool = False
 ):
+    await context.clear()
     await context.set_state(Navigation.navigation)
     if new_message:
         await event.message.answer(
@@ -63,22 +64,3 @@ async def go_to_navigation(
 )
 async def handle_main_menu(event: MessageCallback, context: MemoryContext):
     await start_menu(message_id=event.message.body.mid, context=context)
-
-
-# ------------------------------------
-#  Placeholders for future workflows
-# ------------------------------------
-
-
-@router.message_callback(
-    F.callback.payload == "navigation:oral_report_cards", Navigation.navigation
-)
-async def handle_oral_report_cards(event: MessageCallback, context: MemoryContext):
-    await event.answer(notification="Функция в разработке. Скоро будет доступна!")
-
-
-@router.message_callback(
-    F.callback.payload == "navigation:knowledge_check", Navigation.navigation
-)
-async def handle_knowledge_check(event: MessageCallback, context: MemoryContext):
-    await event.answer(notification="Функция в разработке. Скоро будет доступна!")

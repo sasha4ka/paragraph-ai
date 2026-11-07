@@ -12,7 +12,11 @@ class ManageBooks(StatesGroup):
 class Summarize(StatesGroup):
     select_book = State()
     select_paragraphs = State()
+    processing = State()
     chat_mode = State()
+    quiz_answer = State()
+    quiz_check = State()
+    quiz_review = State()
 
 
 class Feedback(StatesGroup):

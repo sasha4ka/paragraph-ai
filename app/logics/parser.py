@@ -4,10 +4,12 @@ import json
 import logging
 import re
 from collections import Counter
+from itertools import pairwise
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pypdf import PdfReader
+from pypdf.errors import PyPdfError
 
 from app.exc import InvalidTOC
 from app.models import BookMetadata, BookParagraph
@@ -16,6 +18,11 @@ from app.settings import settings
 
 logger = logging.getLogger("book-parser")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+
+_SECTION_NUMBER = re.compile(r"§[ \t]*(\d+)\b")
+_NUMBERED_HEADING = re.compile(
+    r"^[ \t]*§[ \t]*(\d+)\b[ \t]*\.?[ \t]+([^\n]+)", re.MULTILINE
+)
 
 
 class TableOfContentsEntry(BaseModel):
@@ -113,6 +120,89 @@ def _normalize_text(value: str) -> str:
 def _title_candidates(title: str) -> list[str]:
     parts = [part.strip() for part in re.split(r"\s+-\s+", title) if part.strip()]
     return [" - ".join(parts[index:]) for index in range(len(parts))]
+
+
+def find_heading_start(text: str, title: str) -> int | None:
+    """Locate a section heading in extracted page text, including wrapped titles."""
+    candidates = _title_candidates(title)
+    leaf_title = candidates[-1] if candidates else title
+    words = re.findall(r"\w+", leaf_title.casefold())
+    if words:
+        pattern = r"^[^\S\n]*(?:§[^\S\n]*)?" + r"[^\w]+".join(
+            re.sub("[её]", "[её]", re.escape(word))
+            for word in words
+        ) + r"(?!\w)"
+        match = re.search(pattern, text, flags=re.MULTILINE | re.IGNORECASE)
+        if match:
+            return match.start()
+
+    # Older metadata may contain a misspelled title from the model.
+    number = _SECTION_NUMBER.search(title)
+    if number:
+        for match in _NUMBERED_HEADING.finditer(text):
+            if match[1] == number[1]:
+                return match.start()
+    return None
+
+
+def _extract_numbered_book(pdf_path: Path, reader: PdfReader) -> BookMetadata | None:
+    """Use printed headings when the PDF contains a clear sequence of sections."""
+    headings: list[tuple[int, int, str, str]] = []
+    numbers_in_toc: set[int] = set()
+    for file_page, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        matches = list(_NUMBERED_HEADING.finditer(text))
+        if not matches:
+            continue
+
+        for match in matches:
+            number, first_line = match.groups()
+            first_line = first_line.strip()
+            if re.search(r"(?:\.{2,}|…|⋯)", first_line):
+                if re.search(r"\d+\s*$", first_line):
+                    numbers_in_toc.add(int(number))
+                continue
+            if not first_line.isupper() or not first_line[0].isalpha():
+                continue
+            if int(number) != len(headings) + 1:
+                continue
+
+            title_lines = [first_line]
+            for line in text[match.end():].splitlines()[1:4]:
+                line = line.strip()
+                if len(line) < 2 or not line.isupper() or line.startswith("§"):
+                    break
+                title_lines.append(line)
+
+            page_label = re.search(r"(?m)^\s*(\d+)\s*$", "\n".join(text.splitlines()[:5]))
+            printed_page = int(page_label[1]) if page_label else file_page + 1
+            title = " ".join(" ".join(title_lines).split())
+            headings.append((file_page, printed_page, number, f"§ {number}. {title}"))
+
+    if len(headings) < 2:
+        return None
+    if numbers_in_toc - {int(entry[2]) for entry in headings}:
+        return None
+    if any(left[0] == right[0] for left, right in pairwise(headings)):
+        # The current metadata format requires distinct section page numbers.
+        return None
+
+    printed_pages = [entry[1] for entry in headings]
+    if any(left >= right for left, right in pairwise(printed_pages)):
+        printed_pages = [entry[0] + 1 for entry in headings]
+    return BookMetadata(
+        pdf_path=pdf_path,
+        created_at=datetime.datetime.now(datetime.UTC).date(),
+        paragraphs={
+            number: BookParagraph(
+                title=title,
+                book_page_start=printed_pages[index],
+                file_start=file_page,
+                file_end=headings[index + 1][0] if index + 1 < len(headings) else len(reader.pages) - 1,
+            )
+            for index, (file_page, _, number, title) in enumerate(headings)
+        },
+    )
 
 
 def _find_title_pages(reader: PdfReader, title: str) -> list[int]:
@@ -254,11 +344,14 @@ def _get_file_end(
     return page_count - 1
 
 
-def _extract_toc_text_from_path(pdf_path: Path) -> str:
-    reader = PdfReader(pdf_path)
-    if not reader.pages:
-        raise ValueError(f"PDF contains no pages: {pdf_path}")
-    return _extract_toc_text(reader)
+def _read_pdf_structure(pdf_path: Path) -> BookMetadata | str:
+    try:
+        reader = PdfReader(pdf_path)
+        if not reader.pages:
+            raise InvalidTOC(f"PDF contains no pages: {pdf_path}")
+        return _extract_numbered_book(pdf_path, reader) or _extract_toc_text(reader)
+    except (PyPdfError, OSError) as exc:
+        raise InvalidTOC(f"Could not read PDF: {pdf_path}") from exc
 
 
 def _build_book_metadata(pdf_path: Path, toc: TableOfContents) -> BookMetadata:
@@ -398,9 +491,21 @@ async def parse_book(
     if attempts <= 0:
         raise ValueError("attempts must be greater than zero")
 
-    toc_text = await asyncio.to_thread(_extract_toc_text_from_path, pdf_path)
-    client = client if client is not None else get_async_openai_client()
+    structure = await asyncio.to_thread(_read_pdf_structure, pdf_path)
+    if isinstance(structure, BookMetadata):
+        return structure
+    if client is None:
+        try:
+            async with get_async_openai_client() as owned_client:
+                return await _parse_with_model(pdf_path, structure, owned_client, attempts)
+        except ValueError as exc:
+            raise InvalidTOC("RouterAI is not configured for book parsing") from exc
+    return await _parse_with_model(pdf_path, structure, client, attempts)
 
+
+async def _parse_with_model(
+    pdf_path: Path, toc_text: str, client: AsyncOpenAI, attempts: int
+) -> BookMetadata:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
@@ -424,8 +529,8 @@ async def parse_book(
                 attempts,
                 pdf_path,
             )
-            raise InvalidTOC(f"RouterAI failed while parsing TOC: {path}") from exc
-        except (InvalidTOC, ValidationError, json.JSONDecodeError, ValueError) as exc:
+            raise InvalidTOC(f"RouterAI failed while parsing TOC: {pdf_path}") from exc
+        except (InvalidTOC, PyPdfError, ValueError) as exc:
             last_error = exc
             logger.warning(
                 "Failed to parse TOC: attempt=%s/%s, pdf=%s, error_type=%s, error=%s",
@@ -437,5 +542,5 @@ async def parse_book(
                 exc_info=True,
             )
 
-    logger.error("failed to parse TOC after %s attempts: %s", attempts, path)
-    raise InvalidTOC(f"Failed to parse TOC: {path}") from last_error
+    logger.error("failed to parse TOC after %s attempts: %s", attempts, pdf_path)
+    raise InvalidTOC(f"Failed to parse TOC: {pdf_path}") from last_error

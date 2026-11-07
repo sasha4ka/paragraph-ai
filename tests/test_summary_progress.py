@@ -1,36 +1,59 @@
-from app.logics.summary.models import SourceParagraph
-from app.logics.summary.progress import SummaryProgress
-from app.logics.summary.summary_generator import SummaryEvent
+import asyncio
+from importlib import import_module
+from types import SimpleNamespace
+
+from app.logics.summary.models import BakedBlock
+from app.logics.summary.summary_generator import SummaryGeneratorEvent
+from app.states import Summarize
+
+router = import_module("app.handlers.summarize.router")
 
 
-def test_summary_progress_shows_indexed_bars_without_paragraph_names():
-    progress = SummaryProgress([SourceParagraph("Тема 1", "Текст", paragraph_id=12)])
+def test_summary_handler_reports_each_phase_and_sends_result(monkeypatch):
+    edits = []
+    sent = []
+    states = []
 
-    progress.handle_event(SummaryEvent(12, "Тема 1", "extracting"))
-    status = progress.get_status()
-    assert "01. [▰▱▱▱▱▱▱▱▱▱]  Извлечение" in status
-    assert "Тема 1" not in status
+    async def edit(**kwargs):
+        edits.append(kwargs["text"])
 
-    progress.handle_event(SummaryEvent(12, "Тема 1", "waiting_for_others"))
-    assert "01. [▰▰▰▱▱▱▱▱▱▱]  Ожидание" in progress.get_status()
+    async def answer(**kwargs):
+        sent.append(kwargs["text"])
+        return SimpleNamespace(message=SimpleNamespace(body=None, edit=edit))
 
-    progress.handle_event(SummaryEvent(12, "Тема 1", "summarization"))
-    assert "01. [▰▰▰▰▱▱▱▱▱▱]  Конспект" in progress.get_status()
+    async def set_state(state):
+        states.append(state)
 
-    progress.handle_event(SummaryEvent(0, "Итоговый конспект", "synthesis"))
-    status = progress.get_status()
-    assert status.startswith("Собираю итоговый конспект…")
-    assert "Параграфы: 1/1" in status
-    assert "01. [▰▰▰▰▰▰▰▰▰▰]  Готово" in status
+    async def get_data():
+        return {
+            "book_path": "book.json",
+            "paragraphs": [("3", SimpleNamespace(title="Алканы"))],
+        }
 
+    async def resolve(query, titles):
+        return ["3"]
 
-def test_summary_progress_truncates_long_status_to_message_limit():
-    progress = SummaryProgress(
-        [
-            SourceParagraph(f"Тема {index}", "Текст", paragraph_id=index)
-            for index in range(200)
-        ]
+    async def get_text(ids):
+        return "Алканы — углеводороды."
+
+    async def generate(source):
+        assert source.paragraph_id == 3
+        for status in ("cleaning", "planing", "extracting", "baking"):
+            yield SummaryGeneratorEvent(status, False)
+        yield SummaryGeneratorEvent("done", True, result=[BakedBlock(plan_item=1, text="Конспект")])
+
+    book = SimpleNamespace(metadata=SimpleNamespace(title="Химия"), get_text=get_text)
+    monkeypatch.setattr(router, "resolve_paragraphs", resolve)
+    monkeypatch.setattr(router, "generate_text_summary", generate)
+    monkeypatch.setattr(router.BooksRepository, "get_book", lambda self, path: book)
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(user_id=1),
+        message=SimpleNamespace(
+            body=SimpleNamespace(text="3", mid="test"), answer=answer
+        ),
     )
+    asyncio.run(router.select_paragraphs(event, SimpleNamespace(get_data=get_data, set_state=set_state)))
 
-    assert len(progress.get_status()) <= 3800
-    assert "…и ещё" in progress.get_status()
+    assert len(edits) == 4
+    assert sent == ["Готовлю конспект ⏳", "Конспект"]
+    assert states == [Summarize.processing, Summarize.chat_mode]

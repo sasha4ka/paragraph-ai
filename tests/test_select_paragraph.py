@@ -36,3 +36,8 @@ def test_select_paragraphs_resolves_human_title_to_ids():
 
     assert selected == ["12", "18"]
     assert "Параллельность прямых" in client.chat.completions.messages[1]["content"]
+
+
+def test_number_is_matched_to_printed_heading_before_internal_id():
+    paragraphs = {"3": "Выводы к главе I", "4": "Глава II - § 3. Алканы"}
+    assert asyncio.run(select_paragraphs("3", paragraphs)) == ["4"]

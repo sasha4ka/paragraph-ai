@@ -1,1 +1,1 @@
-from app.handlers.feedback.router import router  # type: ignore
+from app.handlers.feedback.router import router as router

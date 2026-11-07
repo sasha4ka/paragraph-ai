@@ -3,8 +3,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.logics.summary.models import *
-
 
 class BookEntry(BaseModel):
     title: str

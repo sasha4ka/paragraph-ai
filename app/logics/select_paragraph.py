@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -36,6 +37,24 @@ async def select_paragraphs(
     if not catalog:
         raise ParagraphSelectionError("В выбранной книге нет параграфов.")
 
+    query = user_text.strip()
+    number = re.fullmatch(r"(?:§\s*|параграф\s+)?(\d+)\.?", query, re.IGNORECASE)
+    if number:
+        matches = []
+        for paragraph_id, title in catalog.items():
+            heading_number = re.search(r"§\s*(\d+)\b", str(title))
+            if heading_number and int(heading_number[1]) == int(number[1]):
+                matches.append(paragraph_id)
+        if len(matches) == 1:
+            return matches
+    exact = [
+        paragraph_id
+        for paragraph_id, title in catalog.items()
+        if query.casefold() == str(title).strip().casefold()
+    ]
+    if len(exact) == 1:
+        return exact
+
     catalog_text = "\n".join(
         f"{paragraph_id}: {title}" for paragraph_id, title in catalog.items()
     )
@@ -57,13 +76,17 @@ async def select_paragraphs(
         },
     ]
 
-    llm = client or get_async_openai_client()
     try:
-        response = await llm.chat.completions.parse(
-            model=settings.default_model,
-            messages=messages,
-            response_format=ParagraphSelection,
-        )
+        options = {
+            "model": settings.default_model,
+            "messages": messages,
+            "response_format": ParagraphSelection,
+        }
+        if client is None:
+            async with get_async_openai_client() as owned_client:
+                response = await owned_client.chat.completions.parse(**options)
+        else:
+            response = await client.chat.completions.parse(**options)
     except (
         APIConnectionError,
         APIError,

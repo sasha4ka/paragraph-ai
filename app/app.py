@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 import uvicorn
 from fastapi import FastAPI
 from maxapi import Bot, Dispatcher
+from maxapi.context import SimpleEventIsolation
 from maxapi.webhook.fastapi import FastAPIMaxWebhook
 
 from app.books import BooksRepository
@@ -17,7 +18,7 @@ from app.handlers.summarize import router as summarize_router
 from app.logging_setup import setup
 from app.settings import settings
 
-dp = Dispatcher()
+dp = Dispatcher(use_create_task=True, event_isolation=SimpleEventIsolation())
 bot = Bot(settings.api_token)
 WEBHOOK_PATH = "/webhook"
 

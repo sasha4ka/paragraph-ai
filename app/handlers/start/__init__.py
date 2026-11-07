@@ -1,1 +1,1 @@
-from app.handlers.start.router import router  # type: ignore
+from app.handlers.start.router import router as router

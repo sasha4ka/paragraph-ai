@@ -1,3 +1,10 @@
+FROM node:22-slim AS katex
+
+WORKDIR /renderer
+COPY renderer/package.json renderer/package-lock.json ./
+RUN npm ci --omit=dev
+COPY renderer/render_formula.cjs ./
+
 FROM python:3.12-slim
 
 RUN apt-get update \
@@ -8,16 +15,23 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /bin/
 
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
 # Install locked dependencies before copying frequently changed application code.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project \
+    && /app/.venv/bin/playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY README.md main.py ./
 COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY --from=katex /usr/local/bin/node /usr/local/bin/node
+COPY --from=katex /renderer/ /app/renderer/
 RUN uv sync --locked --no-dev \
     && /app/.venv/bin/python -c "import pypdf" \
     && useradd --system --uid 10001 --create-home app \

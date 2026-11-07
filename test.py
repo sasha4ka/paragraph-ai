@@ -1,14 +1,10 @@
+import argparse
 import asyncio
 
 from app.logics.parser import parse_book
 
-
-async def main():
-    print(
-        await parse_book(
-            "/home/sasha/Projects/paragraph-ai/books/История Всеобщая 10 класс В.Р. Мединский 2023 г..pdf"
-        )
-    )
-
-
-asyncio.run(main())
+if __name__ == "__main__":
+    cli = argparse.ArgumentParser(description="Проверить извлечение оглавления из PDF")
+    cli.add_argument("pdf", help="Путь к PDF учебника")
+    metadata = asyncio.run(parse_book(cli.parse_args().pdf))
+    print(metadata.model_dump_json(indent=2))

@@ -19,6 +19,12 @@ jobs:
         steps:
             - name: setup checkout
               uses: actions/checkout@v4
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@v6
+
+            - name: Run tests
+              run: uv run --locked python -m pytest -q
             
             - name: GitHub (GHCR) login
               uses: docker/login-action@v3
@@ -36,7 +42,10 @@ jobs:
                 fi
 
                 IMAGE="ghcr.io/${{ env.CONTAINER_NAME }}"
-                docker build -t "$IMAGE:latest" -t "$IMAGE:$BRANCH_TAG" .
-                docker push "$IMAGE:latest"
+                docker build -t "$IMAGE:$BRANCH_TAG" .
                 docker push "$IMAGE:$BRANCH_TAG"
+                if [ "$GITHUB_REF_NAME" = "master" ]; then
+                  docker tag "$IMAGE:$BRANCH_TAG" "$IMAGE:latest"
+                  docker push "$IMAGE:latest"
+                fi
 

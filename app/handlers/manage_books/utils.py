@@ -5,6 +5,7 @@ import aiohttp
 
 from app.books import BookObject
 from app.exc import DownloadError, InvalidPath
+from app.settings import settings
 
 books_dir = Path("books/").absolute()
 
@@ -17,19 +18,28 @@ async def download_file(filename: str, url: str) -> Path:
     if path.parent != books_dir.resolve():
         raise InvalidPath()
 
-    async with (
-        aiohttp.ClientSession() as session,
-        session.get(url) as response,
-    ):
-        if response.status == 200:
-            with open(path, "wb") as f:  # noqa
-                while True:
-                    chunk = await response.content.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-        else:
-            raise DownloadError(f"Failed to download {url}")
+    size = 0
+    created = False
+    completed = False
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session,
+            session.get(url) as response,
+        ):
+            response.raise_for_status()
+            with path.open("xb") as file:
+                created = True
+                async for chunk in response.content.iter_chunked(65536):
+                    size += len(chunk)
+                    if size > settings.max_file_size_mb * 1_000_000:
+                        raise DownloadError("Attachment exceeds the file size limit")
+                    file.write(chunk)
+        completed = True
+    except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+        raise DownloadError("Could not save PDF attachment") from exc
+    finally:
+        if created and not completed:
+            path.unlink(missing_ok=True)
 
     return path
 

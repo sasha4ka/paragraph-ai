@@ -3,8 +3,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from app.logics.summary.models import *
-
 
 @dataclass
 class SourceParagraph:

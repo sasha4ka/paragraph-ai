@@ -1,7 +1,6 @@
-from openai import BaseModel
+from pydantic import BaseModel
 
-from app.logics.summary.models import SourceParagraph
-from app.models import PlanItem
+from app.logics.summary.models import PlanItem, SourceParagraph
 from app.openai import invoke_structured
 
 

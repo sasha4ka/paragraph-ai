@@ -2,9 +2,8 @@ import asyncio
 
 from app.logics.summary.baker import bake
 from app.logics.summary.extractor import extract_facts
-from app.logics.summary.models import PlanItem
+from app.logics.summary.models import SourceParagraph
 from app.logics.summary.planner import make_plan
-from app.models import SourceParagraph
 
 # test_paragraph = SourceParagraph(
 #     "§ 1 Сознание человека. Мировоззрение и ценности",
@@ -338,13 +337,8 @@ test_paragraph = SourceParagraph(
 
 
 async def test():
-    from app.logics.summary.test import test_paragraph
-
     print("1. Generating plan...")
     plan = await make_plan(test_paragraph)
-    mapped_plan: dict[int, PlanItem] = {}
-    for plan_item in plan:
-        mapped_plan[plan_item.id] = plan_item
     print("-" * 50)
     print(*[f"{item.id}. {item.title}" for item in plan], sep="\n")
     print()

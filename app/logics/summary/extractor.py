@@ -1,4 +1,4 @@
-from openai import BaseModel
+from pydantic import BaseModel
 
 from app.logics.summary.models import Fact, PlanItem, SourceParagraph
 from app.openai import invoke_structured
@@ -47,6 +47,7 @@ async def extract_facts(
         result[item.id] = []
 
     for fact in response.facts:
-        result[fact.plan_item].append(fact)
+        if fact.plan_item in result:
+            result[fact.plan_item].append(fact)
 
     return result

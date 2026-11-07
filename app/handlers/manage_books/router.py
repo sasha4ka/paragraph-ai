@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any, TypedDict
 from uuid import uuid1
 
@@ -124,7 +125,11 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
         return
     file = event.message.body.attachments[0]
 
-    if file.size > settings.max_file_size_mb * 1e6:
+    if Path(file.filename).suffix.lower() != ".pdf":
+        await event.message.answer(text="Прикрепите файл в формате PDF.")
+        return
+
+    if file.size is not None and file.size > settings.max_file_size_mb * 1e6:
         await get_bot().send_message(
             chat_id=event.chat.chat_id,
             text="Файл слишком большой!",
@@ -151,9 +156,8 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
 
     data = await context.get_data()
 
-    _original_filename = file.filename.split(".")
-    _extension = _original_filename[-1]
-    _filename = f"{data['book_name']}.{_extension}"
+    book_name = data["book_name"]
+    _filename = f"{book_name}.pdf"
 
     uid = event.from_user.user_id
 
@@ -174,7 +178,7 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
             )
 
         logger.info(f"parsing book: {path} {uid=} {ticket_id=:.8}")
-        await BooksRepository().parse_then_add_book(path, title=data["book_name"])
+        await BooksRepository().parse_then_add_book(path, title=book_name)
 
         data = await context.get_data()
         state = await context.get_state()
@@ -192,7 +196,7 @@ async def upload_book_file(event: MessageCreated, context: MemoryContext):
         logger.warning(f"User attempted to exploit file saving! {user_id=}")
     except DownloadError:
         logger.warning("Failed to download file", exc_info=True)
-    except InvalidTOC:
+    except (InvalidTOC, OSError):
         pass
 
     data = await context.get_data()
@@ -240,8 +244,7 @@ async def delete_selected_book(event: MessageCreated, context: MemoryContext):
 
     logger.warning(f"failed to delete book {path} {uid=}")
 
-    await get_bot().edit_message(
-        message_id=message.message.body.mid,
+    await event.message.answer(
         text="Не удалось удалить книгу",
         attachments=[cancel_keyboard()],
     )

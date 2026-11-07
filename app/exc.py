@@ -12,3 +12,7 @@ class GenerationError(Exception):
 
 class InvalidTOC(Exception):
     pass
+
+
+class RenderingError(Exception):
+    pass
