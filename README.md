@@ -2,6 +2,8 @@
 
 Paragraph AI — бот для платформы MAX, который помогает работать с учебниками в формате PDF. Бот распознаёт структуру книги, находит параграф по запросу и готовит по нему структурированный конспект с помощью модели, совместимой с API OpenAI.
 
+[Открыть бота в MAX](https://max.ru/se14377957_1_bot) · [Готовый Docker-образ в GitHub Packages](https://github.com/sasha4ka/paragraph-ai/pkgs/container/paragraph-ai)
+
 ## Возможности
 
 - Загрузка PDF-файлов учебников размером до 20 MB по умолчанию (настраивается через `MAX_FILE_SIZE_MB`), просмотр списка книг и удаление книг.
@@ -55,20 +57,21 @@ Paragraph AI — бот для платформы MAX, который помог
 ├── compose.yaml            # Приложение и Caddy
 ├── Dockerfile
 ├── pyproject.toml
+├── requirements.txt       # Версии Python-зависимостей для pip
 └── uv.lock
 ```
 
 ## Установка и запуск
 
-Требуются Python 3.12+ и [uv](https://docs.astral.sh/uv/).
+Требуются Python 3.12+ и [uv](https://docs.astral.sh/uv/). Для режима карточек также нужен Node.js 22.12+ с npm.
 
 ```bash
 git clone https://github.com/sasha4ka/paragraph-ai.git
 cd paragraph-ai
-uv sync
+uv sync --locked
 ```
 
-Создайте `.env` в корне проекта. Для локальной разработки с long polling:
+Создайте `.env` в корне проекта. Для локальной разработки с long polling используйте токен отдельного тестового бота:
 
 ```env
 API_TOKEN=your_maxapi_token_here
@@ -76,26 +79,32 @@ OPENAI_API_TOKEN=your_openai_compatible_api_key
 DEBUG=True
 ```
 
-Затем запустите:
+Из корня репозитория установите компоненты для карточек и запустите бота.
 
 ```bash
+npm ci --prefix renderer
+uv run playwright install chromium
 uv run python main.py
+```
+
+Для установки через pip вместо uv используйте `requirements.txt` и команды ниже. Файл содержит закреплённые в `uv.lock` версии всех Python-зависимостей приложения, включая транзитивные.
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+npm ci --prefix renderer
+python -m playwright install chromium
+python main.py
 ```
 
 ### Рендеринг карточки из stdin
 
 Рендерер карточек находится отдельно от основного приложения. Команда `render-card` читает HTML карточки из stdin, преобразует содержимое `<formula>` и `<inline-formula>` в HTML KaTeX и сохраняет изображение PNG или JPEG. Для блочной формулы используется display-режим; CSS KaTeX и шрифты подключаются локально.
 
-Перед первым запуском локально установите Node.js 22.12+ и зависимости KaTeX:
+После установки зависимостей из корня проекта передайте HTML-карточку с `<card-title>` и `<card-body>` через stdin. Путь к изображению укажите аргументом.
 
 ```bash
-cd renderer && npm ci
-```
-
-Затем из корня проекта передайте корректную HTML-карточку (с `<card-title>` и `<card-body>`) через stdin; путь к изображению укажите аргументом:
-
-```bash
-uv run playwright install chromium
 uv run render-card /tmp/card.png < card.html
 ```
 
@@ -143,7 +152,26 @@ docker compose up -d
 docker compose logs -f app
 ```
 
-По умолчанию Compose загружает образ `ghcr.io/sasha4ka/paragraph-ai:latest`. Чтобы выбрать другой тег, задайте `IMAGE_TAG`, например `IMAGE_TAG=release`.
+По умолчанию Compose загружает образ `ghcr.io/sasha4ka/paragraph-ai:latest`. Чтобы выбрать другой тег, задайте `IMAGE_TAG`, например `IMAGE_TAG=release`. Образ также можно скачать командой `docker pull ghcr.io/sasha4ka/paragraph-ai:release`.
+
+### Сборка образа из исходников
+
+Из корня репозитория соберите образ и запустите его через Compose с production-настройками из `.env`.
+
+```bash
+docker build -t ghcr.io/sasha4ka/paragraph-ai:local .
+docker compose pull caddy
+IMAGE_TAG=local docker compose up -d --pull never
+IMAGE_TAG=local docker compose logs -f app
+```
+
+Для локального запуска контейнера из командной строки используйте `.env` с токеном тестового бота и `DEBUG=True`.
+
+```bash
+docker run --rm --env-file .env \
+  --mount source=paragraph_ai_local_books,target=/app/books \
+  ghcr.io/sasha4ka/paragraph-ai:local
+```
 
 При `DEBUG=False` приложение запускает FastAPI на порту 8000 и регистрирует `WEBHOOK_URL` в MAX. URL должен быть абсолютным HTTPS-адресом с путём `/webhook`. Если настроен `WEBHOOK_SECRET`, он используется при регистрации и проверке входящих запросов. Проверить состояние сервера можно запросом `GET /healthcheck`.
 
