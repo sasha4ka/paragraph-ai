@@ -46,7 +46,10 @@ def test_card_blocks_are_rendered_and_sent_with_exit_on_last_card(monkeypatch):
 
     assert rendered == [block.text for block in blocks]
     assert [len(attachments) for _, attachments in sent] == [12, 12, 1, 1]
-    assert all(text is None for text, _ in sent)
+    assert all(text is None for text, _ in sent[:3])
+    assert sent[3][0] == (
+        "Карточки готовы. Нажмите «Выйти», чтобы вернуться к выбору режима."
+    )
     assert all(
         isinstance(attachment, FakeInputMedia)
         for _, attachments in sent[:3]

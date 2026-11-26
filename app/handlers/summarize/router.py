@@ -216,9 +216,7 @@ async def _send_card_blocks(event: MessageCreated, blocks: list[BakedBlock]) -> 
 
     with tempfile.TemporaryDirectory(prefix="paragraph-cards-") as temp_dir:
         for batch_start in range(0, len(blocks), MAX_CARD_IMAGES_PER_MESSAGE):
-            batch = blocks[
-                batch_start : batch_start + MAX_CARD_IMAGES_PER_MESSAGE
-            ]
+            batch = blocks[batch_start : batch_start + MAX_CARD_IMAGES_PER_MESSAGE]
             attachments: list[
                 Attachment | InputMedia | InputMediaBuffer | AttachmentUpload
             ] = []
@@ -234,7 +232,10 @@ async def _send_card_blocks(event: MessageCreated, blocks: list[BakedBlock]) -> 
             if batch_start + len(batch) < len(blocks):
                 await asyncio.sleep(0.5)
 
-    await event.message.answer(attachments=[exit_keyboard()])
+    await event.message.answer(
+        text="Карточки готовы. Нажмите «Выйти», чтобы вернуться к выбору режима.",
+        attachments=[exit_keyboard()],
+    )
 
 
 def _split_message(text: str, limit: int = 3900) -> list[str]:
